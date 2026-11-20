@@ -119,12 +119,10 @@ $upQ = db()->prepare("$base WHERE f.status = 'Pending' AND f.due_date > CURDATE(
 $upQ->execute($args); $upcoming = $upQ->fetchAll();
 // The tiles count every pending check, not just the rows each list shows; a list
 // that reaches its limit says so.
-$cntQ = db()->prepare("SELECT COALESCE(SUM(f.due_date <= CURDATE()),0) AS due_n, COALESCE(SUM(f.due_date > CURDATE()),0) AS up_n
-    FROM equipment_followups f JOIN clients c ON c.id = f.client_id JOIN equipment e ON e.id = f.equipment_id
-    WHERE f.status = 'Pending'$scopeSql");
-$cntQ->execute($args); $cnt = $cntQ->fetch() ?: ['due_n' => 0, 'up_n' => 0];
-$dueTotal = max((int)$cnt['due_n'], count($due));
-$upTotal = max((int)$cnt['up_n'], count($upcoming));
+// inc/device_followups.php, shared with the apps (4.36.0).
+$cnt = followup_totals($scoped ? (int)$user['id'] : null);
+$dueTotal = max($cnt['due'], count($due));
+$upTotal = max($cnt['upcoming'], count($upcoming));
 $recentQ = db()->prepare("$base WHERE f.status IN ('Completed','Skipped')$scopeSql ORDER BY f.completed_at DESC LIMIT 25");
 $recentQ->execute($args); $recent = $recentQ->fetchAll();
 
@@ -229,14 +227,7 @@ function fu_when(array $r): string {
       <tr><td><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a></td>
         <td><?= h($r['equipment_name']) ?></td>
         <td><?= (int)$r['interval_days'] ?>-day</td>
-        <td><?php
-          if ($r['status'] === 'Skipped') echo '<span class="muted">' . ($r['notes'] === 'Device returned' ? 'skipped — device returned' : 'skipped') . '</span>';
-          elseif ($r['in_use'] === null) echo '<span class="muted">Use unknown</span>' . ($r['satisfaction'] ? ' · ' . (int)$r['satisfaction'] . '/5' : '');
-          elseif ((int)$r['in_use'] === 1) echo 'In use' . ($r['satisfaction'] ? ' · ' . (int)$r['satisfaction'] . '/5' : '');
-          else echo '<span class="field-error">Not in use</span>' . ($r['barriers'] ? ' · ' . h($r['barriers']) : '');
-          // Answered by the client in the portal (3.0.42).
-          if (!empty($r['client_reported'])) echo ' · reported by the client';
-        ?></td></tr>
+        <td><?= followup_outcome_html($r) /* inc/device_followups.php, the apps' words too */ ?></td></tr>
     <?php endforeach; ?>
     </tbody>
   </table>
@@ -252,8 +243,10 @@ function fu_when(array $r): string {
 .fu-fields label{display:flex;flex-direction:column;font-size:.85rem;gap:.15rem}
 .fu-use{font-size:.85rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;border:0;margin:0;padding:0}.fu-use legend{float:left;padding:0;margin-right:.5rem}
 .fu-use label{flex-direction:row;align-items:center;gap:.2rem}
-.fu-bar input,.fu-notes input{min-width:14rem}
-.fu-actions{margin-top:.5rem;display:flex;gap:.6rem;align-items:center}
+.fu-bar,.fu-notes{min-width:0;max-width:100%}
+.fu-bar input,.fu-notes input{min-width:min(14rem,100%);max-width:100%;box-sizing:border-box}
+.fu-actions{margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+.fu-actions .btn{white-space:nowrap}
 .stat-row{display:flex;flex-wrap:wrap;gap:.6rem;margin:.6rem 0}
 </style>
 <?php

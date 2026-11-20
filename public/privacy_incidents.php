@@ -19,45 +19,15 @@ $back = fn(string $anchor = '') => redirect('privacy_incidents.php' . ($id ? '?i
 
 /* ---- Report one (any staff member) ---- */
 if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['report_incident'])) {
-    $errs = [];
-    $kind = $in('kind');
-    if (!in_array($kind, PRIVACY_INCIDENT_KINDS, true)) $errs['kind'] = 'Choose what kind of incident it is.';
-    $disc = valid_date($in('discovered_on'), 2000, (int)date('Y'));
-    if ($disc === null || $disc > date('Y-m-d')) $errs['discovered_on'] = 'Enter the date it was discovered (today or earlier).';
-    $occ = $in('occurred_on') === '' ? null : valid_date($in('occurred_on'), 2000, (int)date('Y'));
-    if ($in('occurred_on') !== '' && ($occ === null || $occ > date('Y-m-d'))) $errs['occurred_on'] = 'Enter the date it happened (today or earlier), or leave it blank.';
-    $desc = $in('description');
-    if ($desc === '') $errs['description'] = 'Describe what happened.';
-    elseif (mb_strlen($desc) > 5000) $errs['description'] = 'What happened is too long (5,000 characters maximum).';
-    $info = $in('info_involved');
-    if (mb_strlen($info) > 500) $errs['info_involved'] = 'Keep the information involved to 500 characters or fewer.';
-    $cid = (int)($_POST['client_id'] ?? 0);
-    $client = null;
-    if ($cid) {
-        $c = db()->prepare('SELECT id, name, assigned_to FROM clients WHERE id = ?');
-        $c->execute([$cid]);
-        $client = $c->fetch() ?: null;
-        if (!$client || (caseload_scoped() && (int)$client['assigned_to'] !== (int)$user['id'])) $errs['client_id'] = 'Choose a client on your caseload, or None.';
-    }
-    if ($errs) { keep_input(); keep_field_errors($errs); redirect('privacy_incidents.php#report-h'); }
+    // A form sent twice opens the first report (checked first: a key is kept only after a save).
     $key = web_idem_key($_POST);
     if (($first = web_once_get($key)) !== null) redirect('privacy_incidents.php?id=' . $first);
-    $pdo = db();
-    $pdo->beginTransaction();
-    try {
-        $pdo->prepare('INSERT INTO privacy_incidents (kind, occurred_on, discovered_on, notice_deadline, description, info_involved, reported_by) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$kind, $occ, $disc, date('Y-m-d', strtotime($disc . ' +' . PRIVACY_NOTICE_DAYS . ' days')), $desc, $info !== '' ? $info : null, $user['id']]);
-        $newId = (int)$pdo->lastInsertId();
-        if ($client) $pdo->prepare('INSERT INTO privacy_incident_clients (incident_id, client_id, client_label) VALUES (?,?,?)')->execute([$newId, $client['id'], $client['name']]);
-        $pdo->commit();
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        throw $e;
-    }
+    // Checked, saved, audited and the administrators told by the helper the apps use too (4.36.0).
+    $r = privacy_incident_report($_POST, $user, 'web');
+    if (isset($r['errors'])) { keep_input(); keep_field_errors($r['errors']); redirect('privacy_incidents.php#report-h'); }
+    $newId = $r['id'];
     web_once_set($key, $newId);
-    audit($user['id'], 'privacy_incident.add', 'privacy_incident', $newId, $kind);
-    notify_admin_users('Privacy incident reported: ' . $kind, 'privacy_incidents.php?id=' . $newId);
-    flash('Privacy incident reported. An administrator has been told. The notice deadline is ' . fmt_date(date('Y-m-d', strtotime($disc . ' +' . PRIVACY_NOTICE_DAYS . ' days'))) . '.');
+    flash($r['message']);
     redirect($isAdmin ? 'privacy_incidents.php?id=' . $newId : 'privacy_incidents.php');
 }
 
@@ -242,9 +212,7 @@ if ($ready) {
 }
 $clients = [];
 if ($ready) {
-    $cq = db()->prepare('SELECT id, name FROM clients WHERE archived_at IS NULL' . (caseload_scoped() ? ' AND assigned_to = ?' : '') . ' ORDER BY name');
-    $cq->execute(caseload_scoped() ? [(int)$user['id']] : []);
-    $clients = $cq->fetchAll();
+    $clients = privacy_incident_client_choices($user);
 }
 page_header('Privacy incidents', $user, 'admin');
 ?>

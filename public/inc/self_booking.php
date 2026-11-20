@@ -49,6 +49,31 @@ function availability_add(int $userId, string $weekday, string $from, string $to
     return null;
 }
 
+/** Add one block of hours for $who, audited for $actor (4.36.0: availability.php and the apps).
+ *  Returns null, or [the field it is about, what is wrong]. */
+function availability_add_for(int $who, array $in, int $actor): ?array {
+    $str = fn(string $k): string => is_string($in[$k] ?? null) ? trim($in[$k]) : (is_int($in[$k] ?? null) ? (string)$in[$k] : '');
+    $err = availability_add($who, $str('weekday'), $str('from'), $str('to'), $str('mode') !== 'in_person', $str('location'));
+    if ($err !== null) return $err;
+    audit($actor, 'availability.add', 'user', $who, $str('weekday') . ' ' . $str('from') . '-' . $str('to'));
+    return null;
+}
+
+/** Remove one of $who's blocks of hours, audited for $actor. False when it was already removed (or is not theirs). */
+function availability_remove(int $who, int $id, int $actor): bool {
+    $d = db()->prepare('DELETE FROM staff_availability WHERE id = ? AND user_id = ?');
+    $d->execute([$id, $who]);
+    if (!$d->rowCount()) return false;
+    audit($actor, 'availability.remove', 'user', $who, '#' . $id);
+    return true;
+}
+
+/** The paragraph at the top of My availability. */
+function availability_intro(array $person, bool $isSelf, bool $isAdmin): string {
+    $cfg = self_booking_settings();
+    return 'The hours you take sessions. ' . ($cfg['on'] ? 'Your clients see the open times in these hours in their portal and can book one: a time is open when you have no session then, your Outlook calendar is free (if you connected it on My Account), it is at least ' . $cfg['notice_hours'] . ' hours ahead, and the client\'s authorization covers it.' : 'Self-booking is off, so clients do not see them yet' . ($isAdmin ? ' (turn it on below).' : '; an administrator turns it on.'));
+}
+
 /** "Mondays 9:00 AM to 12:00 PM, online" */
 function availability_words(array $a): string {
     $t = fn(string $hms) => date('g:i A', strtotime('2000-01-01 ' . $hms));

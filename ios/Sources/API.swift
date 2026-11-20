@@ -63,7 +63,19 @@ struct DashboardData: Decodable {
     let recentNotes: [RecentNote]
     /// The administrator's "authorization ending soon" days (4.34.0); nil from an older server.
     let authSoonDays: Int?
-    private enum CodingKeys: String, CodingKey { case activeClients, pendingClients, newReferrals, unbilledHours, unbilledAmount, expiring, expiringTotal, recentReferrals, recentNotes, authSoonDays }
+    /// 4.36.0 (nil from an older server, which hides each part): the website's Today panel and
+    /// its heading, My tasks, Your week, and the agreements, training and credentials banners.
+    let today: [DashboardTodayItem]?
+    let todayHeading: String?
+    let tasks: DashboardTasks?
+    let weekText: String?
+    let agreementsNeeded: Int?
+    let trainingNeeded: Int?
+    let credentialsDue: [DashboardCredentialDue]?
+    private enum CodingKeys: String, CodingKey {
+        case activeClients, pendingClients, newReferrals, unbilledHours, unbilledAmount, expiring, expiringTotal, recentReferrals, recentNotes, authSoonDays
+        case today, todayHeading, tasks, weekText, agreementsNeeded, trainingNeeded, credentialsDue
+    }
     // Tolerant decode so one absent field doesn't blank the entire home tab.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -77,7 +89,77 @@ struct DashboardData: Decodable {
         recentReferrals = (try? c.decode([RecentReferral].self, forKey: .recentReferrals)) ?? []
         recentNotes = (try? c.decode([RecentNote].self, forKey: .recentNotes)) ?? []
         authSoonDays = (try? c.decodeIfPresent(Int.self, forKey: .authSoonDays)) ?? nil
+        today = (try? c.decodeIfPresent([DashboardTodayItem].self, forKey: .today)) ?? nil
+        todayHeading = (try? c.decodeIfPresent(String.self, forKey: .todayHeading)) ?? nil
+        tasks = (try? c.decodeIfPresent(DashboardTasks.self, forKey: .tasks)) ?? nil
+        weekText = (try? c.decodeIfPresent(String.self, forKey: .weekText)) ?? nil
+        agreementsNeeded = (try? c.decodeIfPresent(Int.self, forKey: .agreementsNeeded)) ?? nil
+        trainingNeeded = (try? c.decodeIfPresent(Int.self, forKey: .trainingNeeded)) ?? nil
+        credentialsDue = (try? c.decodeIfPresent([DashboardCredentialDue].self, forKey: .credentialsDue)) ?? nil
     }
+}
+
+/// One line of the dashboard's Today panel (4.36.0): kind is tasks_overdue, tasks_today,
+/// sessions, messages, followups or portal_requests; sessions carry one line per session.
+struct DashboardTodayItem: Decodable, Identifiable {
+    let kind: String
+    let count: Int
+    let text: String
+    let sessions: [DashboardTodaySession]
+    var id: String { kind }
+    private enum CodingKeys: String, CodingKey { case kind, count, text, sessions, sub }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        count = (try? c.decode(Int.self, forKey: .count)) ?? 0
+        text = (try? c.decode(String.self, forKey: .text)) ?? ""
+        // "sessions" in the API contract; "sub" as the shared helper names them.
+        sessions = (try? c.decodeIfPresent([DashboardTodaySession].self, forKey: .sessions))
+            ?? (try? c.decodeIfPresent([DashboardTodaySession].self, forKey: .sub)) ?? []
+    }
+}
+
+/// "9:00 AM — Synthetic Client (Keyboarding), ended, awaiting an outcome"
+struct DashboardTodaySession: Decodable, Identifiable {
+    let id: Int
+    let text: String
+    private enum CodingKeys: String, CodingKey { case id, sessionId, text }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(Int.self, forKey: .id)) ?? (try? c.decode(Int.self, forKey: .sessionId)) ?? 0
+        text = (try? c.decode(String.self, forKey: .text)) ?? ""
+    }
+}
+
+/// The dashboard's My tasks (4.36.0): the first open tasks, the real totals and the heading.
+struct DashboardTasks: Decodable {
+    let items: [DashboardTask]
+    let total: Int
+    let heading: String
+    private enum CodingKeys: String, CodingKey { case items, total, heading }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        items = (try? c.decode([DashboardTask].self, forKey: .items)) ?? []
+        total = (try? c.decode(Int.self, forKey: .total)) ?? 0
+        heading = (try? c.decode(String.self, forKey: .heading)) ?? "My tasks"
+    }
+}
+
+struct DashboardTask: Decodable, Identifiable {
+    let id: Int
+    let line: String
+    private enum CodingKeys: String, CodingKey { case id, line, title }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        line = (try? c.decode(String.self, forKey: .line)) ?? (try? c.decode(String.self, forKey: .title)) ?? ""
+    }
+}
+
+/// A credential of the signed-in person's to renew: "Driver's license", "expires in 10 days".
+struct DashboardCredentialDue: Decodable {
+    let name: String
+    let words: String
 }
 
 struct RecentReferral: Decodable, Identifiable {
@@ -124,7 +206,9 @@ struct ExpiringTrack: Decodable, Identifiable {
     /// True (3.0.13 servers) for an authorization that has already lapsed while its track
     /// is still Active; nil from older servers, which list upcoming expirations only.
     let isExpired: Bool?
-    private enum CodingKeys: String, CodingKey { case id, title, expirationDate, client, isExpired }
+    /// The client, so the row opens their record (4.36.0); nil from an older server.
+    let clientId: Int?
+    private enum CodingKeys: String, CodingKey { case id, title, expirationDate, client, isExpired, clientId }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -132,6 +216,7 @@ struct ExpiringTrack: Decodable, Identifiable {
         expirationDate = try? c.decodeIfPresent(String.self, forKey: .expirationDate)
         client = (try? c.decode(String.self, forKey: .client)) ?? ""
         isExpired = try? c.decodeIfPresent(Bool.self, forKey: .isExpired)
+        clientId = (try? c.decodeIfPresent(Int.self, forKey: .clientId)) ?? nil
     }
 }
 
@@ -1123,7 +1208,11 @@ struct Followup: Decodable, Identifiable {
     /// The client's counselor (4.28.0; nil from a server that does not send it): the 8:00
     /// reminder counts only the signed-in person's own follow-ups.
     let assignedTo: Int?
-    private enum CodingKeys: String, CodingKey { case id, clientId, equipmentId, intervalDays, dueDate, status, inUse, satisfaction, barriers, notes, completedAt, clientName, equipmentName, assetTag, assignedTo }
+    /// The client answered it themselves (4.36.0), and, for a recorded one, the website's words
+    /// for its outcome ("In use · 4/5 · reported by the client"); nil from an older server.
+    let clientReported: Bool?
+    let outcome: String?
+    private enum CodingKeys: String, CodingKey { case id, clientId, equipmentId, intervalDays, dueDate, status, inUse, satisfaction, barriers, notes, completedAt, clientName, equipmentName, assetTag, assignedTo, clientReported, outcome }
     // Tolerant decode so one malformed follow-up can't blank the whole list.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -1142,6 +1231,8 @@ struct Followup: Decodable, Identifiable {
         equipmentName = (try? c.decode(String.self, forKey: .equipmentName)) ?? ""
         assetTag = try? c.decodeIfPresent(String.self, forKey: .assetTag)
         assignedTo = (try? c.decodeIfPresent(Int.self, forKey: .assignedTo)) ?? nil
+        clientReported = (try? c.decodeIfPresent(Bool.self, forKey: .clientReported)) ?? nil
+        outcome = (try? c.decodeIfPresent(String.self, forKey: .outcome)) ?? nil
     }
 }
 
@@ -1152,6 +1243,9 @@ struct FollowupsResponse: Decodable {
     let due: [Followup]
     let upcoming: [Followup]
     let recent: [Followup]
+    /// Every due and upcoming check (4.36.0; the lists hold at most 300 and 100); nil from an older server.
+    let dueTotal: Int?
+    let upcomingTotal: Int?
 }
 
 // MARK: - Secure messages (v2.53 parity)
@@ -1200,6 +1294,10 @@ struct ThreadResponse: Decodable {
     /// Texting (4.17.0): set up, and why this client cannot be texted (nil: they can).
     let textEnabled: Bool?
     let textBlocked: String?
+    /// The counselor email is on file but not confirmed (4.36.0), and the server's sentence
+    /// saying so; nil from an older server.
+    let counselorUnconfirmed: Bool?
+    let counselorUnconfirmedText: String?
 }
 
 // MARK: - Incidents (v2.54 parity)

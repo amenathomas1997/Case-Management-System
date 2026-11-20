@@ -472,7 +472,9 @@ fun FollowupsScreen(api: Api) {
             OfflineCopyNotice(savedAt)
             NoticeText(notice)
             val queued = api.ownQueued().filter { it.optString("action") == "save_followup" }.map { try { JSONObject(it.optString("body")).optInt("id") } catch (e: Exception) { 0 } }.toSet()
-            listOf("due" to "Due now", "upcoming" to "Coming up").forEach { (k, title) ->
+            // 4.36.0: the website's four tiles, one stop together.
+            ListRow(followupTiles(r))
+            listOf("due" to "Due now", "upcoming" to "Upcoming").forEach { (k, title) ->
                 val list = r.optJSONArray(k).objects()
                 Heading("$title (${list.size})")
                 list.forEach { f ->
@@ -481,6 +483,12 @@ fun FollowupsScreen(api: Api) {
                         (if (waiting) "Recorded, waiting to send. " else "") + "${f.optInt("interval_days")}-day check, due " + dayText(f.str("due_date"))),
                         action = "record it", onClick = if (waiting) null else ({ chosenJson = f.toString() }))
                 }
+            }
+            // 4.36.0: Recently recorded, in the website's words.
+            val recent = r.optJSONArray("recent").objects()
+            if (recent.isNotEmpty()) {
+                Heading("Recently recorded (${recent.size})")
+                recent.forEach { f -> ListRow(listOf(recentLine(f))) }
             }
         }
     }

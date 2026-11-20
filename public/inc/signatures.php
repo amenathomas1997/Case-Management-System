@@ -256,3 +256,10 @@ function signature_withdraw_result(int $id, int $clientId, int $actor): string {
     audit($actor, 'signature.withdraw', 'client', $clientId, 'signature #' . $id);
     return 'withdrawn';
 }
+
+/** The administrators are told a document was signed (4.36.0: one helper for every channel):
+ *  "Signed in person: <title> for <client>" (the website's hand-over and the apps) or
+ *  "Signed: <title> for <client>" (from the email link), linked to the client's signatures. */
+function signature_signed_notice(array $s, string $clientName, bool $inPerson): void {
+    notify_admin_users(($inPerson ? 'Signed in person: ' : 'Signed: ') . $s['title'] . ' for ' . $clientName, 'signatures.php?client=' . (int)$s['client_id']);
+}

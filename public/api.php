@@ -353,7 +353,7 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
 const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig',
-    'client_ids', 'tracks', 'listed', 'attended', 'times'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
+    'client_ids', 'tracks', 'listed', 'attended', 'times', 'task_ids'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -608,6 +608,13 @@ if ($action === 'verify') {
     out(['ok' => true, 'token' => $token, 'name' => $user['name'], 'role' => $user['role'], 'user_id' => (int)$user['id']]);
 }
 
+/* ---------- Unauthenticated: what the sign-in screen can say (4.36.0) ----------
+   Whether Microsoft sign-in is set up, so the app can tell someone who signs in with Microsoft
+   on the website how to get a password. login.php shows the same fact to anyone; no account is read. */
+if ($action === 'sign_in_options') {
+    out(['ok' => true, 'microsoft' => entra_cfg() !== null]);
+}
+
 /* ---------- Authentication for everything else ---------- */
 $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 if (!preg_match('/Bearer\s+([a-f0-9]{64})/', $auth, $m)) fail('Sign in required.', 401);
@@ -707,19 +714,53 @@ $API_ACTION_PERMS = [
     'request_consent' => 'clients', 'consents_due' => 'clients', 'pipeline' => 'clients', 'client_history' => 'clients',
     'invoices' => 'billing',
     'waitlist' => 'referrals', 'waitlist_update' => 'referrals', 'doc_review' => 'clients',
+    // 4.36.0 (inc/api_436.php), checked here too so a retry after losing the permission is refused
+    // before the retry guard answers it. Its other actions need only a sign-in.
+    'privacy_incident_choices' => 'clients', 'report_privacy_incident' => 'clients',
 ];
 /* Account settings (inc/api_account.php) and the 3.0.22 parity actions (inc/api_parity.php)
    live in their own files; each re-checks what it needs. */
-const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all'];
+const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all',
+    'app_devices', 'device_action', 'save_alert_settings'];   // 4.36.0: one phone signed out or wiped; the mobile number and alert emails
 const API_PARITY_ACTIONS = ['tasks', 'save_task', 'complete_task', 'notifications', 'mark_notifications_read', 'portal_requests', 'portal_request_update',
     'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices', 'waitlist', 'waitlist_update', 'doc_review',
-    'check_in_session'];
+    'check_in_session', 'mark_notifications_unread'];   // 4.36.0: undo a mark-as-read
 if (isset($API_ACTION_PERMS[$action]) && !can($API_ACTION_PERMS[$action])) {
     // Held back only until required agreements or training are done (4.16.0): say so.
     if (!empty($GLOBALS['ACCESS_HOLD']) && in_array($API_ACTION_PERMS[$action], (array)($GLOBALS['PERMS_BEFORE_HOLD'] ?? []), true)) {
         fail('Client records open once you finish: ' . implode(', ', $GLOBALS['ACCESS_HOLD']) . '. Open My agreements and My training.', 403);
     }
     fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
+}
+
+/** The dashboard's 4.36.0 parts, from the helpers index.php renders (inc/dashboard.php and the
+ *  staff helpers): Today, My tasks, Your week, and the agreements, training and credentials
+ *  banners. Client names only with the clients permission, as the website shows them. */
+function api_dashboard_436(int $userId): array {
+    $user = ['id' => $userId];
+    $today = dashboard_today($user);
+    $t = dashboard_my_tasks($user);
+    $canClients = can('clients');
+    return [
+        'today' => array_map(fn(array $i): array => ['kind' => $i['kind'], 'count' => $i['count'], 'text' => $i['text']]
+            + ($i['kind'] === 'sessions' ? ['sessions' => array_map(fn($s) => ['id' => $s['session_id'], 'text' => $s['text']], $i['sub'])] : []), $today),
+        'today_heading' => dashboard_today_heading($today),
+        'tasks' => ['items' => array_map(fn(array $r): array => [
+                'id' => (int)$r['id'], 'title' => (string)$r['title'],
+                'client_id' => $canClients && $r['client_id'] !== null ? (int)$r['client_id'] : null,
+                'client_name' => $canClients && $r['client_name'] !== null ? (string)$r['client_name'] : null,
+                'due_date' => $r['due_date'] !== null ? (string)$r['due_date'] : null,
+                'days_left' => $r['due_date'] !== null ? (int)$r['days_left'] : null,
+                'assigned_to' => $r['assigned_to'] !== null ? (int)$r['assigned_to'] : null,
+                'assigned_name' => $r['assignee_name'] !== null ? (string)$r['assignee_name'] : null,
+                'line' => dashboard_task_line($r, $user, $t['team'])], $t['rows']),
+            'total' => $t['total'], 'overdue' => $t['overdue'], 'team' => $t['team'], 'heading' => dashboard_tasks_heading($t)],
+        'week_text' => staff_week_text(staff_week($userId)),
+        // Not client data, so sent with no permission (the website shows them to everyone).
+        'agreements_needed' => staff_agreements_needed($userId),
+        'training_needed' => training_needed($userId),
+        'credentials_due' => array_map(fn($c) => ['name' => (string)$c['name'], 'words' => (string)credential_state($c)[1]], credentials_due_for($userId)),
+    ];
 }
 
 /* Caseload scoping (mirrors the website): "own caseload only" users may only
@@ -788,7 +829,12 @@ const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'up
     'submit_invoice',   // 4.34.0: a retry after a lost reply gets the first answer (inc/api_more.php)
     // 4.35.0 (inc/api_435.php): a group booked, its attendance recorded, times offered, the survey
     // emailed or entered, a follow-up check recorded. offer_times is guarded on POST only.
-    'schedule_group', 'complete_group', 'offer_times', 'send_survey', 'phone_survey', 'closure_followup'];
+    'schedule_group', 'complete_group', 'offer_times', 'send_survey', 'phone_survey', 'closure_followup',
+    // 4.36.0: one phone signed out or reported lost (inc/api_account.php), a privacy incident reported,
+    // hours added and several tasks completed (inc/api_436.php).
+    'device_action', 'report_privacy_incident', 'add_availability', 'complete_tasks',
+    // delete_task: a retry after a lost reply answers "Task deleted." again, not "no longer exists".
+    'delete_task'];
 // The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
 // before any action runs, the parity actions included (4.29.0: save_task, save_track and
 // request_consent are parity actions, and before this they ran before the guard).
@@ -953,13 +999,14 @@ switch ($action) {
             // tracks cannot push next week's expirations off the 10-row list.
             // Open clients only (as index.php, compliance.php and cron/daily_alerts.php):
             // closing a client leaves its track Active, so it would stay listed for ever.
-            $q = db()->prepare("SELECT t.id, t.title, t.expiration_date, c.name AS client, (t.expiration_date < CURDATE()) AS is_expired
+            // client_id (4.36.0): each row opens the client, as on the website.
+            $q = db()->prepare("SELECT t.id, t.title, t.expiration_date, c.name AS client, c.id AS client_id, (t.expiration_date < CURDATE()) AS is_expired
                 FROM training_tracks t JOIN clients c ON c.id = t.client_id
                 WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)"
                 . $scopeAnd . " ORDER BY (t.expiration_date < CURDATE()),
                     CASE WHEN t.expiration_date >= CURDATE() THEN t.expiration_date END, t.expiration_date DESC LIMIT 10");
             $q->execute($scopeParams); $expiring = $q->fetchAll();
-            foreach ($expiring as &$expRow) { $expRow['is_expired'] = (bool)$expRow['is_expired']; } unset($expRow);
+            foreach ($expiring as &$expRow) { $expRow['is_expired'] = (bool)$expRow['is_expired']; $expRow['client_id'] = (int)$expRow['client_id']; } unset($expRow);
             // The list holds at most 10; the app says how many expire in all.
             $q = db()->prepare("SELECT COUNT(*) FROM training_tracks t JOIN clients c ON c.id = t.client_id
                 WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)" . $scopeAnd);
@@ -997,7 +1044,7 @@ switch ($action) {
              'unbilled_hours' => (float)$unbilled['h'], 'unbilled_amount' => (float)$unbilled['a'], 'expiring' => $expiring,
              'expiring_total' => $expiringTotal, 'recent_referrals' => $recentRefs, 'recent_notes' => $recentNotes,
              // The administrator's "authorization ending soon" days (4.34.0), so the app names them.
-             'auth_soon_days' => (int)cms_number('auth_soon_days')]);
+             'auth_soon_days' => (int)cms_number('auth_soon_days')] + api_dashboard_436($userId));
 
     case 'clients':
         $q = trim((string)($_GET['q'] ?? ''));
@@ -4256,60 +4303,10 @@ switch ($action) {
     }
 
     /* ========================= Compliance dashboard ========================= */
-    case 'compliance': {
-        $scoped = caseload_scoped();
-        $scopeSql = $scoped ? ' AND c.assigned_to = ?' : '';
-        $scopeArg = $scoped ? [$userId] : [];
-        $soon = date('Y-m-d', strtotime('+30 days')); $today = date('Y-m-d');   // equipment due; authorizations use auth_soon_days
-        $authRisk = [];
-        // As compliance.php: a closed or archived client's track is never closed for them,
-        // so without the open-client filter it would stay listed as expired for ever.
-        $rows = db()->prepare("SELECT t.id, t.title, t.auth_number, t.expiration_date, c.name AS client FROM training_tracks t JOIN clients c ON c.id = t.client_id
-            WHERE t.status='Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql . " ORDER BY t.expiration_date IS NULL, t.expiration_date");
-        $rows->execute($scopeArg);
-        foreach ($rows->fetchAll() as $t) {
-            $r = track_rollup((int)$t['id']);
-            // Exact, rounded down (as compliance.php): 79.6% used is 79%, never shown as 80%.
-            $authC = (int)round($r['authorized_hours'] * 100);
-            $pct = $authC > 0 ? intdiv((int)round($r['hours_worked'] * 100) * 100, $authC) : 0;
-            // Funds are also used by mileage and expenses, so a track can run out of
-            // money before 80% of its hours: flagged too, by the same rule in cents.
-            $fundsC = (int)round($r['authorized_funds'] * 100);
-            $fundsPct = $fundsC > 0 ? intdiv(($fundsC - (int)round($r['funds_remaining'] * 100)) * 100, $fundsC) : 0;
-            $expSoon = $t['expiration_date'] && $t['expiration_date'] <= date('Y-m-d', strtotime('+' . cms_number('auth_soon_days') . ' days'));
-            if ($pct >= cms_number('auth_warn_pct') || $fundsPct >= cms_number('auth_warn_pct') || $expSoon) {
-                $authRisk[] = ['id' => (int)$t['id'], 'title' => $t['title'], 'client' => $t['client'], 'pct' => $pct,
-                    'funds_pct' => $fundsC > 0 ? $fundsPct : null, 'funds_remaining' => $fundsC > 0 ? round((float)$r['funds_remaining'], 2) : null,
-                    'expiration_date' => $t['expiration_date'], 'expired' => $t['expiration_date'] && $t['expiration_date'] < $today];
-            }
-        }
-        // The website's order, so the most urgent is reached first: expired, then most used.
-        usort($authRisk, fn($a, $b) => ($b['expired'] <=> $a['expired'])
-            ?: (max($b['pct'], (int)$b['funds_pct']) <=> max($a['pct'], (int)$a['funds_pct'])));
-        $reportsDue = [];
-        // The same tracks and first due date as compliance.php and the automatic reports:
-        // no closed or archived client's track, and before its first report a track is
-        // due one cadence period after it started (or was entered, if that is later);
-        // a monthly report keeps the cron's 1st-of-month rhythm (report_due_date()).
-        $cad = db()->prepare("SELECT t.id, t.title, t.report_cadence, t.last_report_at, t.start_date, t.created_at, c.name AS client
-            FROM training_tracks t JOIN clients c ON c.id = t.client_id
-            WHERE t.status='Active' AND t.report_cadence <> 'none' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql);
-        $cad->execute($scopeArg);
-        foreach ($cad->fetchAll() as $t) {
-            $since = $t['last_report_at'] ?: max((string)$t['start_date'], substr((string)$t['created_at'], 0, 10));
-            $due = report_due_date((string)$t['report_cadence'], (string)$since);
-            if ($due <= $today) $reportsDue[] = ['id' => (int)$t['id'], 'title' => $t['title'], 'client' => $t['client'], 'due' => $due, 'cadence' => $t['report_cadence']];
-        }
-        $equipDue = [];
-        if (can('equipment')) {
-            foreach (db()->query("SELECT id, name, last_service_date, maintenance_interval_days FROM equipment WHERE status <> 'Retired' AND maintenance_interval_days > 0")->fetchAll() as $e) {
-                $due = $e['last_service_date'] ? date('Y-m-d', strtotime($e['last_service_date'] . ' +' . (int)$e['maintenance_interval_days'] . ' days')) : $today;
-                if ($due <= $soon) $equipDue[] = ['id' => (int)$e['id'], 'name' => $e['name'], 'due' => $due, 'overdue' => $due < $today];
-            }
-            usort($equipDue, fn($a, $b) => strcmp($a['due'], $b['due']));
-        }
-        out(['ok' => true, 'auth_risk' => $authRisk, 'reports_due' => $reportsDue, 'equipment_due' => $equipDue]);
-    }
+    case 'compliance':
+        // inc/compliance_data.php, the same data compliance.php renders (4.36.0): every section,
+        // with the page's caseload scope and its equipment and billing gates.
+        out(compliance_api_reply(['id' => $userId]));
 
     /* ========================= AI tools ========================= */
     case 'ai_recommend': {
@@ -4634,7 +4631,7 @@ switch ($action) {
         $ss->execute($args); $stat = $ss->fetch() ?: ['done' => 0, 'in_use' => 0, 'not_use' => 0];
         $retention = ((int)$stat['done'] > 0) ? (int)round(100 * (int)$stat['in_use'] / (int)$stat['done']) : null;
         $base = "SELECT f.id, f.client_id, f.equipment_id, f.interval_days, f.due_date, f.status, f.in_use, f.satisfaction,
-                f.barriers, f.notes, f.completed_at, c.name AS client_name, c.assigned_to AS assigned_to, e.name AS equipment_name, e.serial AS asset_tag
+                f.barriers, f.notes, f.completed_at, f.client_reported, c.name AS client_name, c.assigned_to AS assigned_to, e.name AS equipment_name, e.serial AS asset_tag
             FROM equipment_followups f JOIN clients c ON c.id = f.client_id JOIN equipment e ON e.id = f.equipment_id";
         $dueQ = db()->prepare("$base WHERE f.status = 'Pending' AND f.due_date <= CURDATE()$scopeSql ORDER BY f.due_date LIMIT 300");
         $dueQ->execute($args); $due = $dueQ->fetchAll();
@@ -4642,8 +4639,14 @@ switch ($action) {
         $upQ->execute($args); $upcoming = $upQ->fetchAll();
         $recentQ = db()->prepare("$base WHERE f.status IN ('Completed','Skipped')$scopeSql ORDER BY f.completed_at DESC LIMIT 25");
         $recentQ->execute($args); $recent = $recentQ->fetchAll();
+        // 4.36.0 (inc/device_followups.php, as followups.php): the real totals, who answered, and each
+        // recorded check's outcome in the website's words.
+        $fuRow = fn(array $r): array => ['client_reported' => !empty($r['client_reported'])] + $r;
+        $totals = followup_totals($scoped ? $userId : null);
         out(['ok' => true, 'retention' => $retention, 'abandoned' => (int)$stat['not_use'], 'completed' => (int)$stat['done'],
-             'due' => $due, 'upcoming' => $upcoming, 'recent' => $recent]);
+             'due' => array_map($fuRow, $due), 'upcoming' => array_map($fuRow, $upcoming),
+             'recent' => array_map(fn($r) => $fuRow($r) + ['outcome' => followup_outcome_text($r)], $recent),
+             'due_total' => max($totals['due'], count($due)), 'upcoming_total' => max($totals['upcoming'], count($upcoming))]);
     }
     case 'save_followup': {
         $id = (int)($input['id'] ?? 0);
@@ -4752,28 +4755,18 @@ switch ($action) {
 
     /* ---------- Secure message center (v2.53 parity) ---------- */
     case 'message_threads': {
-        $scoped = caseload_scoped();
-        $sql = "SELECT c.id AS client_id, c.name AS client_name,
-                COUNT(m.id) AS total,
-                SUM(m.sender <> 'staff' AND m.read_at IS NULL) AS unread,
-                SUM(m.channel = 'client' AND m.sender <> 'staff' AND m.read_at IS NULL) AS unread_client,
-                SUM(m.channel = 'counselor' AND m.sender <> 'staff' AND m.read_at IS NULL) AS unread_counselor,
-                MAX(m.created_at) AS last_at
-            FROM clients c JOIN messages m ON m.client_id = c.id
-            WHERE 1=1" . ($scoped ? ' AND c.assigned_to = ?' : '') . "
-            GROUP BY c.id, c.name ORDER BY last_at DESC LIMIT 200";
-        $st = db()->prepare($sql); $st->execute($scoped ? [$userId] : []);
-        $threads = $st->fetchAll();
-        // "unread" covers both channels; the per-channel counts tell the app which
-        // conversation (client or counselor) holds the unread messages, since
-        // opening a thread marks only the channel it shows as read.
-        foreach ($threads as &$thread) {
-            $thread['unread'] = (int)$thread['unread'];
-            $thread['unread_client'] = (int)$thread['unread_client'];
-            $thread['unread_counselor'] = (int)$thread['unread_counselor'];
-        }
-        unset($thread);
-        out(['ok' => true, 'threads' => $threads]);
+        // inc/messages_list.php, shared with messages.php (4.36.0): one row per client (the
+        // website lists each channel), unread first, then the newest, with the last message.
+        $conv = message_conversations(caseload_scoped() ? $userId : null, $userId, false);
+        $threads = array_map(fn(array $r): array => [
+            'client_id' => (int)$r['client_id'], 'client_name' => (string)$r['client_name'], 'total' => (int)$r['total'],
+            // "unread" covers both channels; the per-channel counts tell the app which
+            // conversation (client or counselor) holds the unread messages, since
+            // opening a thread marks only the channel it shows as read.
+            'unread' => (int)$r['unread'], 'unread_client' => (int)$r['unread_client'], 'unread_counselor' => (int)$r['unread_counselor'],
+            'last_at' => (string)$r['last_at'], 'last_body' => (string)$r['last_body'], 'last_sender_label' => (string)$r['last_sender_label'],
+            'last_channel' => $r['last_channel'] === 'counselor' ? 'counselor' : 'client'], $conv['rows']);
+        out(['ok' => true, 'threads' => $threads, 'total' => $conv['total'], 'unread_total' => $conv['unread']]);
     }
     case 'message_thread': {
         $cid = (int)($_GET['client_id'] ?? 0);
@@ -4786,9 +4779,14 @@ switch ($action) {
             FROM messages m LEFT JOIN users u ON u.id = m.staff_id LEFT JOIN client_documents d ON d.id = m.document_id AND d.client_id = m.client_id
             WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
         $m->execute([$cid, $channel]);
-        $c = db()->prepare('SELECT name, counselor_name FROM clients WHERE id = ?'); $c->execute([$cid]); $cRow = $c->fetch();
+        $c = db()->prepare('SELECT name, counselor_name, counselor_email, counselor_verified FROM clients WHERE id = ?'); $c->execute([$cid]); $cRow = $c->fetch();
+        // 4.36.0: said before the reply is typed, as messages.php: the counselor portal does not show
+        // a client whose counselor email is still unconfirmed (inc/messages_list.php).
+        $unconfirmed = trim((string)($cRow['counselor_email'] ?? '')) !== '' && (int)($cRow['counselor_verified'] ?? 0) === 0;
         out(['ok' => true, 'client_name' => (string)($cRow['name'] ?? ''), 'counselor_name' => $cRow['counselor_name'] ?? null,
-             'channel' => $channel, 'messages' => $m->fetchAll(), 'text_enabled' => sms_enabled(), 'text_blocked' => sms_client_blocked(sms_client($cid))]);
+             'channel' => $channel, 'messages' => $m->fetchAll(), 'text_enabled' => sms_enabled(), 'text_blocked' => sms_client_blocked(sms_client($cid)),
+             'counselor_unconfirmed' => $unconfirmed,
+             'counselor_unconfirmed_text' => $unconfirmed ? message_counselor_unconfirmed_text((string)$cRow['name'], false) : '']);
     }
     case 'post_message': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -4820,7 +4818,7 @@ switch ($action) {
             catch (Throwable $e) { /* the check below still answers later copies */ }
             $seen = db()->prepare('SELECT id FROM messages WHERE staff_id = ? AND idem_key = ? AND client_id = ?');
             $seen->execute([$userId, $idem, $cid]);
-            if ($seenId = $seen->fetchColumn()) out(['ok' => true, 'id' => (int)$seenId, 'delivered' => true, 'warning' => null, 'texted' => null, 'repeat' => true]);
+            if ($seenId = $seen->fetchColumn()) out(['ok' => true, 'id' => (int)$seenId, 'delivered' => true, 'warning' => null, 'texted' => null, 'noticed' => false, 'repeat' => true]);
         }
         if ($fileB64 !== null) {
             if (strlen($fileB64) > (int)ceil(25 * 1024 * 1024 / 3) * 4 + 4) fail('File is too large (25 MB maximum).', 413);
@@ -4845,7 +4843,7 @@ switch ($action) {
             $textResult = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . ($body !== '' ? $body : (client_lang($cid) === 'es' ? 'Le enviamos un archivo. Ábralo en su portal.' : 'We sent you a file. Open your portal to see it.')), 'message', null, $userId);
             if ($textResult['ok']) db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$id]);
         }
-        message_notice($cid, $channel); // 3.0.40: a short "new message" email, at most once a day
+        $noticed = (bool)message_notice($cid, $channel); // 3.0.40: a short "new message" email, at most once a day
         // Same check as the website (messages.php): the portal is the only way the
         // other side reads a message, so say when there is no live link to read it on.
         // The counselor portal lists only clients whose counselor email staff have
@@ -4870,7 +4868,8 @@ switch ($action) {
                 : 'Message saved, but this client\'s counselor has no active portal link, so they cannot read it yet. An administrator can send one from the counselor portal screen.'));
         if ($textResult && $textResult['ok']) { $delivered = true; $warning = $textResult['status'] === 'held' ? 'Text: ' . $textResult['message'] : null; }
         elseif ($textResult) $warning = trim(($warning ? $warning . ' ' : '') . 'Not sent as a text: ' . $textResult['message']);
-        out(['ok' => true, 'id' => $id, 'delivered' => $delivered, 'warning' => $warning, 'texted' => $textResult['status'] ?? null]);
+        // noticed (4.36.0): "They were emailed that a message is waiting.", as messages.php says it.
+        out(['ok' => true, 'id' => $id, 'delivered' => $delivered, 'warning' => $warning, 'texted' => $textResult['status'] ?? null, 'noticed' => $noticed]);
     }
 
     /* ---------- Incident & safety log (v2.54 parity) ---------- */
@@ -5139,7 +5138,8 @@ switch ($action) {
     default:
         // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
         $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId)   // and the 4.25.0 ones (inc/api_425.php)
-            ?? api_435($action, $input, $userId);   // and the 4.35.0 ones (inc/api_435.php)
+            ?? api_435($action, $input, $userId)   // and the 4.35.0 ones (inc/api_435.php)
+            ?? api_436($action, $input, $userId);   // and the 4.36.0 ones (inc/api_436.php)
         if ($more === null) fail('Unknown action.', 404);
         // A refusal keeps its other fields (4.27.0: fields, signed), without the status.
         if (empty($more['ok'])) { $st = (int)($more['status'] ?? 400); unset($more['status']); out(['ok' => false, 'error' => (string)$more['error']] + $more, $st); }

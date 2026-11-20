@@ -339,3 +339,49 @@ function session_booking_input(array $src, string $p, array $user): array {
         'staff_scoped' => $staff ? resolve_perms($staff)['scoped'] : false,
     ]];
 }
+
+/** Whether a Scheduled session not yet checked in can be checked in now (from 30 minutes before
+ *  its start to 12 hours after), for schedule.php's Check in button. */
+function session_check_in_open(array $s): bool {
+    if (($s['status'] ?? '') !== 'Scheduled' || !empty($s['checked_in_at'])) return false;
+    $start = strtotime((string)$s['start_at']);
+    return $start !== false && $start <= time() + 30 * 60 && $start >= time() - 12 * 3600;
+}
+
+/**
+ * Record when the client arrived (4.36.0: moved from the apps' check_in_session, shared with
+ * schedule.php's Check in). The session must be Scheduled (and on $scopeUser's caseload when
+ * given) and its start within the window: 30 minutes before to 12 hours after; an offline
+ * check-in from the apps ($atTs, when it was tapped) must be believable (no earlier than 2 hours
+ * before the start or later than 12 hours after it, not in the future, received within 7 days).
+ * The first check-in is kept. Audited session.checkin with the channel ('mobile' or 'web').
+ * Returns ['ok', 'error', 'status', 'checked_in_at', 'client_name', 'message'].
+ */
+function session_check_in(int $sid, int $actor, ?int $scopeUser, ?int $atTs, string $channel): array {
+    $no = fn(string $e, int $st): array => ['ok' => false, 'error' => $e, 'status' => $st, 'checked_in_at' => null, 'client_name' => null, 'message' => null];
+    $st = db()->prepare("SELECT s.id, s.start_at, s.checked_in_at, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+        WHERE s.id = ? AND s.status = 'Scheduled'" . ($scopeUser !== null ? ' AND c.assigned_to = ?' : ''));
+    $st->execute($scopeUser !== null ? [$sid, $scopeUser] : [$sid]);
+    $sess = $st->fetch();
+    if (!$sess) return $no('Session not found or already closed.', 404);
+    if ($sess['checked_in_at'] !== null) return $no('Already checked in at ' . date('g:i A', strtotime((string)$sess['checked_in_at'])) . '.', 409);
+    $start = strtotime((string)$sess['start_at']);
+    if ($atTs !== null) {
+        if ($atTs > time() + 5 * 60) return $no('The check-in time is in the future, so it was not recorded. Check the phone\'s clock, then check the client in again.', 422);
+        if ($atTs < time() - 7 * 86400) return $no('That check-in was made more than 7 days ago, so it can no longer be recorded. Record the session\'s outcome instead.', 422);
+        if ($atTs < $start - 2 * 3600 || $atTs > $start + 12 * 3600) return $no('The check-in time is not within 2 hours before to 12 hours after the session start, so it was not recorded. Record the session\'s outcome instead.', 422);
+    } else {
+        if ($start > time() + 30 * 60) return $no('That session starts at ' . date('g:i A', $start) . ' on ' . date('M j', $start) . '; check-in opens 30 minutes before it.', 422);
+        if ($start < time() - 12 * 3600) return $no('That session was scheduled more than 12 hours ago, so it can no longer be checked in. Record its outcome instead.', 422);
+    }
+    // Claim: two taps, or a colleague checking in meanwhile, record the first arrival only.
+    $claim = db()->prepare('UPDATE scheduled_sessions SET checked_in_at = ' . ($atTs !== null ? '?' : 'NOW()') . ' WHERE id = ? AND checked_in_at IS NULL');
+    $claim->execute($atTs !== null ? [date('Y-m-d H:i:s', $atTs), $sid] : [$sid]);
+    $at = db()->prepare('SELECT checked_in_at FROM scheduled_sessions WHERE id = ?');
+    $at->execute([$sid]);
+    $checkedIn = (string)$at->fetchColumn();
+    if ($claim->rowCount() !== 1) return $no('Already checked in at ' . date('g:i A', strtotime($checkedIn)) . '.', 409);
+    audit($actor, 'session.checkin', 'session', $sid, $channel . ($atTs !== null ? ', offline at ' . date('Y-m-d H:i', $atTs) : ''));
+    return ['ok' => true, 'error' => null, 'status' => 200, 'checked_in_at' => $checkedIn, 'client_name' => (string)$sess['client_name'],
+        'message' => $sess['client_name'] . ' checked in at ' . date('g:i A', strtotime($checkedIn)) . '.'];
+}

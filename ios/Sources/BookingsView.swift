@@ -321,6 +321,9 @@ struct NewRecordClientPicker: View {
     @Binding var selection: Int?
     /// The name errors about this choice start with ("Client: …"), shown and said with it.
     var errorName: String? = nil
+    /// The clients to choose from when the screen's own reply already lists them (4.36.0: the
+    /// privacy incident form's privacy_incident_choices); nil loads client_choices.
+    var preset: [ClientRow]? = nil
     @State private var clients: [ClientRow] = []
     @State private var started = false
     @State private var loading = false
@@ -378,7 +381,9 @@ struct NewRecordClientPicker: View {
         loading = true; loadError = nil
         defer { loading = false }
         do {
-            if includeClosed {
+            if let preset {
+                clients = preset
+            } else if includeClosed {
                 // Closed (not archived) clients stay choosable here, as on the website.
                 let r: ClientsResponse
                 do { r = try await api.call("client_choices") }

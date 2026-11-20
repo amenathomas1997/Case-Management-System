@@ -69,6 +69,7 @@ fun MoreScreen(api: Api, nav: NavHostController) {
         ListRow(listOf("My agreements"), onClick = { nav.navigate("agreements") })
         ListRow(listOf("My training"), onClick = { nav.navigate("training") })
         ListRow(listOf("My credentials"), onClick = { nav.navigate("credentials") })
+        ListRow(listOf("My availability"), onClick = { nav.navigate("availability") })
         ListRow(listOf("My account"), onClick = { nav.navigate("account") })
 
         Heading("Help and privacy")
@@ -101,9 +102,14 @@ fun AccountScreen(api: Api, nav: NavHostController) {
             // 4.34.0: the role, with the permission group, as on the website's My Account.
             ListRow(listOf("Role: " + roleWords(a.str("role"), a.str("group"))))
             ListRow(listOf("Authenticator app: " + if (a.optBoolean("totp_enabled")) "on" else "off"))
-            ListRow(listOf("Phones signed in to the app: " + a.optInt("app_sessions")))
+            // 4.36.0: the mobile number and alert emails, calendar and meetings, availability,
+            // each phone signed in (sign one out or report it lost), and passkeys.
+            AlertSettingsSection(api, a) { state.reload() }
+            ConnectionsSection(api, a)
+            ListRow(listOf("My availability"), onClick = { nav.navigate("availability") })
+            PhonesSection(api, nav, a.optInt("app_sessions"))
+            PasskeysSection(api, a) { state.reload() }
         }
-        Text("Passkeys and lost phones are managed under My Account on the website.")
         // 4.34.0: the app lock, as the iPhone's My Account says it.
         val context = LocalContext.current
         val canLock = remember { androidx.biometric.BiometricManager.from(context).canAuthenticate(org.casemanagement.app.appLockAuthenticators()) != androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED }

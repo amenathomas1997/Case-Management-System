@@ -15,6 +15,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import kotlinx.coroutines.launch
 import org.casemanagement.app.Api
@@ -109,32 +111,36 @@ fun PipelineScreen(api: Api, nav: NavHostController) {
     }
 }
 
-/** Authorizations at risk, progress reports due, equipment service due. */
+/**
+ * 4.36.0: every section of the website's compliance page, in its order, each row opening its
+ * item. A 4.35.0 server sends the first three only; its consents come from consents_due.
+ */
 @Composable
 fun ComplianceScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("compliance") }
-    val consents = rememberLoaded(api.userId) { api.call("consents_due").optJSONArray("consents").objects() }
+    val needsConsents = state.data?.let { !it.has("consents") } ?: false
+    val consents = rememberLoaded(api.userId, needsConsents) { if (needsConsents) api.call("consents_due").optJSONArray("consents") else null }
     Show(state, "compliance") { r ->
+        val merged = if (r.has("consents")) r else consents.data?.let { JSONObject(r.toString()).put("consents", it) } ?: r
         Page {
-            val risk = r.optJSONArray("auth_risk").objects()
-            Heading("Authorizations at risk (${risk.size})")
-            risk.forEach { a -> ListRow(listOf(a.optString("client") + ": " + a.optString("title"), "${a.optInt("pct")}% of hours used" + (a.str("expiration_date")?.let { (if (a.optBoolean("expired")) ", ended " else ", ends ") + dayText(it) } ?: ""))) }
-            val due = r.optJSONArray("reports_due").objects()
-            Heading("Progress reports due (${due.size})")
-            due.forEach { d -> ListRow(listOf(d.optString("client") + ": " + d.optString("title"), d.optString("cadence") + ", due " + dayText(d.str("due")))) }
-            val eq = r.optJSONArray("equipment_due").objects()
-            if (eq.isNotEmpty()) {
-                Heading("Equipment service due (${eq.size})")
-                eq.forEach { e -> ListRow(listOf(e.optString("name"), (if (e.optBoolean("overdue")) "overdue since " else "due ") + dayText(e.str("due")))) }
-            }
-            // 4.34.0: consents to renew, as the website's compliance page (guardian consents that ended at 18 too).
-            Heading("Consents to renew" + (consents.data?.let { " (${it.size})" } ?: ""))
-            Show(consents, "consents") { list ->
-                if (list.isEmpty()) Text("No consents need attention.")
-                list.forEach { c -> ListRow(consentRowWords(c), action = "open the client", onClick = if (c.optInt("client_id") > 0) ({ nav.navigate("client/${c.optInt("client_id")}") }) else null) }
+            complianceSections(merged, api.can("equipment"), api.can("billing")) { consentRowWords(it) }.forEach { sec -> ComplianceBlock(sec, nav, top = true) }
+            if (needsConsents && consents.data == null) {
+                Heading("Consents to renew")
+                Show(consents, "consents") { }
             }
         }
     }
+}
+
+@Composable
+private fun ComplianceBlock(sec: ComplianceSection, nav: NavHostController, top: Boolean) {
+    if (top) Heading(sec.heading) else Text(sec.heading, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+    sec.intro?.let { Text(it) }
+    if (sec.rows.isEmpty() && sec.subs.isEmpty()) sec.empty?.let { Text(it) }
+    sec.note?.let { Text(it) }
+    sec.rows.forEach { row -> ListRow(row.lines, action = if (row.route != null) "open it" else null, onClick = row.route?.let { rt -> { nav.navigate(rt) } }) }
+    sec.subs.forEach { ComplianceBlock(it, nav, top = false) }
 }
 
 /** The waitlist: each person's status, follow-up date and notes. */
@@ -266,7 +272,7 @@ private fun SubmitInvoiceDialog(api: Api, i: JSONObject, onDone: (String) -> Uni
 
 /** Incidents: open ones first; report one, or change its status. */
 @Composable
-fun IncidentsScreen(api: Api) {
+fun IncidentsScreen(api: Api, nav: NavHostController) {
     var showAll by rememberSaveable { mutableStateOf(false) }
     val state = rememberLoaded(showAll) { api.call("incidents", if (showAll) mapOf("all" to "1") else emptyMap()) }
     // Kept across rotation and process death, as the report's fields are (4.28.0).
@@ -279,6 +285,8 @@ fun IncidentsScreen(api: Api) {
         NoticeText(notice)
         ErrorText(error)
         PrimaryButton("Report an incident") { adding = true }
+        // 4.36.0: a possible privacy breach is reported on its own form, as the website's.
+        if (api.can("clients")) PrimaryButton("Report a privacy incident") { nav.navigate("privacyIncident") }
         Tick("Show closed incidents", showAll) { showAll = it }
         Show(state, "incidents") { r ->
             val list = r.optJSONArray("incidents").objects()
@@ -324,6 +332,10 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
     var description by rememberSaveable { mutableStateOf("") }
     var location by rememberSaveable { mutableStateOf("") }
     var action by rememberSaveable { mutableStateOf("") }
+    // 4.36.0: the client it concerns, if one (closed clients too, as the iPhone's picker).
+    var clientId by rememberSaveable { mutableStateOf("0") }
+    var clientError by remember { mutableStateOf<String?>(null) }
+    val clients = rememberLoaded(api.userId) { try { org.casemanagement.app.parseClients(api.call("client_choices")) } catch (e: ApiException) { emptyList() } }
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var dateError by remember { mutableStateOf<String?>(null) }
@@ -339,6 +351,7 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
                 Field("Date", date, { date = it }, hint = "year-month-day", error = dateError, required = true)
                 Choice("Type", type, listOf("" to "Choose a type") + types.map { it to it }, typeError, required = true) { type = it; typeError = null }
                 Choice("Severity", severity, listOf("Low", "Medium", "High", "Critical").map { it to it }) { severity = it }
+                Choice("Client (optional)", clientId, listOf("0" to "None") + (clients.data ?: emptyList()).map { it.id.toString() to it.name }, error = clientError) { clientId = it; clientError = null }
                 Field("What happened", description, { description = it }, singleLine = false, minLines = 3, required = true, error = descriptionError)
                 Field("Where", location, { location = it }, hint = "optional")
                 Field("What was done", action, { action = it }, hint = "optional", singleLine = false)
@@ -356,8 +369,17 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
                 errorSummary(listOf(dateError, typeError, descriptionError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     // 4.28.0: a retry after a lost reply reports it once (see sendOnce).
-                    api.callOnce("add_incident", JSONObject().put("incident_date", date.trim()).put("type", type).put("severity", severity)
-                        .put("description", description.trim()).put("location", location.trim()).put("action_taken", action.trim()), idem, { idem = it }, "the incident report")
+                    try {
+                        api.callOnce("add_incident", incidentBody(date, type, severity, description, location, action, clientId.toIntOrNull() ?: 0), idem, { idem = it }, "the incident report")
+                    } catch (e: ApiException) {
+                        when (incidentFieldFor(e.message)) {
+                            "client" -> clientError = e.message
+                            "date" -> dateError = e.message
+                            "type" -> typeError = e.message
+                            "description" -> descriptionError = e.message
+                        }
+                        throw e
+                    }
                     onDone("Incident reported.")
                 }
             }) { Text(if (busy) "Saving…" else "Report") }

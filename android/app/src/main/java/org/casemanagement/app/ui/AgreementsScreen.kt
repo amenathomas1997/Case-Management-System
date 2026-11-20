@@ -46,9 +46,9 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
             Heading(a.optString("title"), large = true)
             Text(a.optString("why") + ".")
             MarkdownBlocks(a.optString("body"))
-            if (a.optString("state") == "signed") {
-                a.str("signature_id")?.let { sid -> SecondaryButton("Read your signed copy") { nav.navigate("agreementCopy/$sid") } }
-            } else {
+            // 4.36.0: the signed copy whenever there is one, a "due" agreement (renew soon) included.
+            a.str("signature_id")?.takeIf { copyLinkShown(a.str("state"), it) }?.let { sid -> SecondaryButton("Read your signed copy") { nav.navigate("agreementCopy/$sid") } }
+            if (a.optString("state") != "signed") {
                 Heading("Sign")
                 Tick("I have read this agreement and agree to it", agree, error = agreeError) { agree = it; if (it) agreeError = null }
                 Field("Type your full name to sign", name, { name = it; nameError = null }, hint = "as it is on your account: ${api.userName}", required = true, error = nameError)
@@ -88,6 +88,8 @@ fun AgreementCopyScreen(api: Api, id: Int) {
         Page {
             Heading(c.optString("title") + ": your signed copy", large = true)
             Text("Signed by ${c.optString("signed_name")} on ${whenText(c.str("signed_at"))}, version ${c.optInt("version")}. This is the text exactly as it read when you signed.")
+            // 4.36.0: small corrections made since, as the website says them.
+            c.str("corrections_text")?.let { Text(it) }
             MarkdownBlocks(c.optString("body"))
         }
     }

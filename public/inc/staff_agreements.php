@@ -136,6 +136,15 @@ function staff_agreement_small_change(string $old, string $new): bool {
     return max(count($a) - $p - $s, count($b) - $p - $s) <= 40;
 }
 
+/** "Small corrections were made to the current text after you signed: …. Your copy above is unchanged."
+ *  for a signed copy (needs agreement_id, version, signed_at), or "" when there were none (4.36.0:
+ *  agreements.php and the apps' agreement_copy). */
+function staff_agreement_corrections_text(array $copy): string {
+    $fixes = staff_agreement_corrections_after((int)$copy['agreement_id'], (int)$copy['version'], (string)$copy['signed_at']);
+    if (!$fixes) return '';
+    return 'Small corrections were made to the current text after you signed: ' . implode('; ', array_map(fn($f) => fmt_datetime($f['changed_at']) . ($f['name'] ? ' by ' . $f['name'] : ''), $fixes)) . '. Your copy above is unchanged.';
+}
+
 /** Small corrections made to an agreement's text after a given time, for a signed copy. */
 function staff_agreement_corrections_after(int $agreementId, int $version, string $since): array {
     try {

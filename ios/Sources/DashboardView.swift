@@ -44,12 +44,40 @@ struct DashboardView: View {
                         Text(notice).font(.callout.weight(.medium))
                     }
                     if !api.accessHold.isEmpty {
-                        // 4.16.0: client records wait until these are done.
-                        NavigationLink { AgreementsView() } label: {
-                            Text("Client records open once you finish: " + api.accessHold.joined(separator: ", ") + ".").font(.callout.weight(.semibold))
-                        }
+                        // 4.16.0: client records wait until these are done. 4.36.0: the words, then
+                        // both pages as links of their own (the hold may be training, not agreements).
+                        Text("Client records open once you finish: " + api.accessHold.joined(separator: ", ") + ".").font(.callout.weight(.semibold))
+                        NavigationLink { AgreementsView() } label: { dashboardRow("My agreements") }
+                            .buttonStyle(.plain)
+                        NavigationLink { TrainingView() } label: { dashboardRow("My training") }
+                            .buttonStyle(.plain)
                     }
                     if let data {
+                        bannerRows(data)
+                        todayPanel(data)
+                        // 4.31.0: sessions completed without their case note, each with Write it now.
+                        if let notes = notesToWrite, !notes.notes.isEmpty {
+                            Text("Notes to write (\(max(notes.total, notes.notes.count)))")
+                                .font(.headline)
+                                .padding(.top, 8)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(notes.notes.prefix(10)) { item in
+                                NoteToWriteRow(item: item) {
+                                    noteSavedMessage = nil
+                                    noteRequest = SessionNoteRequest(target: item, arrival: item.contextLine + ".")
+                                }
+                                .padding(12)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            if max(notes.total, notes.notes.count) > 10 {
+                                Text("Showing the 10 newest. The Schedule lists them all.")
+                                    .font(.callout).foregroundStyle(Color.secondaryText)
+                            }
+                        }
+                        // Your week (4.36.0), after Notes to write as on the website: one stop.
+                        if let week = data.weekText, !week.isEmpty {
+                            Text(week).font(.callout)
+                        }
                         // As on the website, a figure the account has no permission for is left
                         // out (the server sends 0 for it, which would read as a fact).
                         // One column at the accessibility text sizes (4.30.0), as Utilization's
@@ -72,25 +100,7 @@ struct DashboardView: View {
                                                        api.scoped ? "on your caseload" : "across all tracks", data.unbilledAmount))
                             }
                         }
-                        // 4.31.0: sessions completed without their case note, each with Write it now.
-                        if let notes = notesToWrite, !notes.notes.isEmpty {
-                            Text("Notes to write (\(max(notes.total, notes.notes.count)))")
-                                .font(.headline)
-                                .padding(.top, 8)
-                                .accessibilityAddTraits(.isHeader)
-                            ForEach(notes.notes.prefix(10)) { item in
-                                NoteToWriteRow(item: item) {
-                                    noteSavedMessage = nil
-                                    noteRequest = SessionNoteRequest(target: item, arrival: item.contextLine + ".")
-                                }
-                                .padding(12)
-                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-                            }
-                            if max(notes.total, notes.notes.count) > 10 {
-                                Text("Showing the 10 newest. The Schedule lists them all.")
-                                    .font(.callout).foregroundStyle(Color.secondaryText)
-                            }
-                        }
+                        myTasksPanel(data)
                         if api.can("referrals"), let deadlines = referralDeadlines {
                             Text("Referrals contacted on time (90 days): \(deadlines.contactedOnTime) of \(deadlines.referrals)")
                                 .font(.callout.weight(.medium))
@@ -106,7 +116,7 @@ struct DashboardView: View {
                                     .foregroundStyle(Color.secondaryText)
                             } else {
                                 ForEach(data.expiring) { track in
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    let row = VStack(alignment: .leading, spacing: 2) {
                                         Text(track.client).font(.body.weight(.semibold))
                                         // The words say which it is: the lapsed ones are not shown by colour.
                                         Text("\(track.title) — \(track.isExpired == true ? "expired" : "expires") \(formatDate(track.expirationDate))")
@@ -117,6 +127,13 @@ struct DashboardView: View {
                                     .padding(12)
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                                     .accessibilityElement(children: .combine)
+                                    // 4.36.0: opens the client, as the website's row links do.
+                                    if let clientId = track.clientId, clientId > 0 {
+                                        NavigationLink(value: clientId) { row }
+                                            .buttonStyle(.plain)
+                                    } else {
+                                        row
+                                    }
                                 }
                                 // The list holds the 10 soonest; say so when there are more.
                                 if let total = data.expiringTotal, total > data.expiring.count {
@@ -287,6 +304,121 @@ struct DashboardView: View {
     }
 
     /// A More tools row that opens a website page in the in-app browser.
+    /// A dashboard row that opens another screen: one stop, its words, and a chevron.
+    private func dashboardRow(_ text: String) -> some View {
+        HStack {
+            Text(text).font(.callout.weight(.medium)).multilineTextAlignment(.leading)
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(Rectangle())
+    }
+
+    /// A banner as the website's: its heading, then its sentence, the row opening the page
+    /// (the website's "Open My …" link). One stop.
+    private func bannerRow(_ heading: String, _ sentence: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(heading).font(.callout.weight(.semibold))
+                Text(sentence).font(.callout)
+            }
+            .multilineTextAlignment(.leading)
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The website's banners, in its order (4.36.0): credentials to renew, training to take,
+    /// agreements to sign, each with index.php's heading and sentence and opening its page.
+    /// Absent from an older server.
+    @ViewBuilder private func bannerRows(_ d: DashboardData) -> some View {
+        if let creds = d.credentialsDue, !creds.isEmpty {
+            NavigationLink { CredentialsView() } label: {
+                bannerRow(creds.count == 1 ? "A credential to renew" : "\(creds.count) credentials to renew", credentialsBannerText(creds))
+            }
+            .buttonStyle(.plain)
+        }
+        if let n = d.trainingNeeded, n > 0 {
+            NavigationLink { TrainingView() } label: {
+                bannerRow(n == 1 ? "Training to take" : "\(n) trainings to take", "Please read it and answer the questions.")
+            }
+            .buttonStyle(.plain)
+        }
+        if let n = d.agreementsNeeded, n > 0 {
+            NavigationLink { AgreementsView() } label: {
+                bannerRow(n == 1 ? "An agreement to sign" : "\(n) agreements to sign", n == 1 ? "Please read and sign it." : "Please read and sign them.")
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// The Today panel (4.36.0), as the website's: the server's heading and lines, each opening
+    /// the screen it counts, with today's sessions as rows of their own under their line.
+    @ViewBuilder private func todayPanel(_ d: DashboardData) -> some View {
+        if let items = d.today {
+            Text(d.todayHeading ?? "Today")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            if items.isEmpty {
+                Text("Nothing due today.").foregroundStyle(Color.secondaryText)
+            }
+            ForEach(items) { item in
+                todayLink(item)
+                ForEach(item.sessions) { session in
+                    NavigationLink { ScheduleView() } label: { dashboardRow(session.text) }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 16)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func todayLink(_ item: DashboardTodayItem) -> some View {
+        switch item.kind {
+        case "tasks_overdue":
+            NavigationLink { TasksView(due: "overdue") } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        case "tasks_today":
+            NavigationLink { TasksView(due: "today") } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        case "sessions":
+            NavigationLink { ScheduleView() } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        case "messages":
+            NavigationLink { MessagesView() } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        case "followups":
+            NavigationLink { FollowupsView() } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        case "portal_requests":
+            NavigationLink { PortalRequestsView() } label: { dashboardRow(item.text) }.buttonStyle(.plain)
+        default:
+            Text(item.text).font(.callout.weight(.medium))
+        }
+    }
+
+    /// My tasks (4.36.0), after the tiles as on the website: the server's heading and lines,
+    /// each opening the task list, then "Open the task list".
+    @ViewBuilder private func myTasksPanel(_ d: DashboardData) -> some View {
+        if let tasks = d.tasks, !tasks.items.isEmpty {
+            Text(tasks.heading)
+                .font(.headline)
+                .padding(.top, 8)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(tasks.items) { task in
+                NavigationLink { TasksView() } label: { dashboardRow(task.line) }
+                    .buttonStyle(.plain)
+            }
+            NavigationLink { TasksView() } label: { dashboardRow("Open the task list") }
+                .buttonStyle(.plain)
+        }
+    }
+
     private func webToolRow(_ title: String, subtitle: String, systemImage: String) -> some View {
         HStack {
             Label {
@@ -758,4 +890,9 @@ struct WorkflowBriefingView: View {
         api.copyProtected(text)
         announce("Copied the \(what). The copy is cleared from the clipboard in 10 minutes.")
     }
+}
+
+/// "Driver's license, expires in 10 days; CPR card, expired." (index.php's credentials banner sentence, 4.36.0).
+func credentialsBannerText(_ list: [DashboardCredentialDue]) -> String {
+    list.map { $0.name + ", " + $0.words }.joined(separator: "; ") + "."
 }

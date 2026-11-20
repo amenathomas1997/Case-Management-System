@@ -71,11 +71,12 @@ struct AgreementDetailView: View {
                     Text(a["title"] as? String ?? "Agreement").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     Text((a["why"] as? String ?? "") + ".")
                     KBBlocksView(text: a["body"] as? String ?? "")
-                    if (a["state"] as? String) == "signed" {
-                        if let sid = a["signature_id"] as? Int {
-                            NavigationLink("Read your signed copy") { AgreementCopyView(id: sid) }
-                        }
-                    } else {
+                    // 4.36.0: the signed copy whenever there is a signature, as the website's
+                    // "Signed copy" link: an agreement due for renewal shows it and Sign.
+                    if let sid = a["signature_id"] as? Int {
+                        NavigationLink("Read your signed copy") { AgreementCopyView(id: sid) }
+                    }
+                    if (a["state"] as? String) != "signed" {
                         Text("Sign").font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 8)
                         // Both are needed to sign: said in their labels (4.30.0), and a Sign tap
                         // with either missing says which, on that field, rather than a dimmed button.
@@ -165,6 +166,10 @@ struct AgreementCopyView: View {
                 if let c = copy {
                     Text((c["title"] as? String ?? "Agreement") + ": your signed copy").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     Text("Signed by \(c["signed_name"] as? String ?? "") on \(formatDateTime(c["signed_at"] as? String ?? "")), version \(c["version"] as? Int ?? 0). This is the text exactly as it read when you signed.")
+                    // 4.36.0: small corrections made after signing, as the website says them.
+                    if let corrections = c["corrections_text"] as? String, !corrections.isEmpty {
+                        Text(corrections)
+                    }
                     KBBlocksView(text: c["body"] as? String ?? "")
                 } else if error == nil { ProgressView("Loading your signed copy…") }
             }.padding()

@@ -152,8 +152,14 @@ private fun MainScreen(api: Api) {
         add(Tab("more", "More", Icons.Filled.Menu))
     }
     val entry by nav.currentBackStackEntryAsState()
-    val route = entry?.destination?.route ?: "home"
+    // 4.36.0: a route's optional query ("tasks?due={due}") is not part of its name.
+    val route = entry?.destination?.route?.substringBefore('?') ?: "home"
     val isTab = tabs.any { it.route == route }
+    // 4.36.0: the tab lit is the last tab shown (the one a screen was opened from), so a list opened
+    // from Home keeps Home lit.
+    var lastTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("home") }
+    androidx.compose.runtime.SideEffect { if (isTab && lastTab != route) lastTab = route }
+    val tabRoute = if (isTab) route else lastTab
     // 4.31.0: a session's note says where you are: "Case note for Jane Doe, session on Oct 20".
     val sessionNote = (entry?.arguments?.getString("session")?.toIntOrNull() ?: 0) > 0
     val title = if (sessionNote) org.casemanagement.app.sessionNoteTitle(entry?.arguments?.getString("client"), entry?.arguments?.getString("subject"))
@@ -187,7 +193,7 @@ private fun MainScreen(api: Api) {
         // discarding (or says it is still saving) asks here too.
         topBar = { TitleBar(title, showBack = !isTab, focus = titleFocus) { backDispatcher?.onBackPressed() ?: nav.popBackStack() } },
         bottomBar = {
-            TabBar(tabs, route) { t ->
+            TabBar(tabs, tabRoute) { t ->
                 nav.navigate(t.route) {
                     popUpTo(nav.graph.findStartDestination().id) { saveState = true }
                     launchSingleTop = true; restoreState = true
@@ -296,7 +302,12 @@ private val titles = mapOf(
     "signatures" to "Documents to sign", "release" to "Release of information", "history" to "Status history",
     "trackNote" to "Add a case note", "goal" to "Progress history", "equipmentItem" to "Equipment item", "reservations" to "Reservations",
     "actions" to "Action center", "briefing" to "AI case briefing", "help" to "Help and glossary",
+    "tasksBulk" to "Complete several tasks", "taskList" to "Tasks", "availability" to "My availability", "privacyIncident" to "Report a privacy incident",
 )
+
+/** 4.36.0: an optional text argument of a route's query. */
+private fun textArg(name: String, default: String? = null) =
+    androidx.navigation.navArgument(name) { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = default }
 
 /** The optional arguments of a session's note (4.31.0): text, so a missing one reads as empty. */
 private val noteArgs = listOf("subject", "session", "client").map { name ->
@@ -328,9 +339,19 @@ private fun Graph(api: Api, nav: NavHostController) {
             LogHoursScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
         }
         composable("schedule") { ScheduleScreen(api, nav) }
-        composable("tasks") { TasksScreen(api, nav) }
+        // 4.36.0: the Today panel and alerts open the list on a due filter.
+        composable("tasks?due={due}", arguments = listOf(textArg("due", "any"))) { TasksScreen(api, nav, it.arguments?.getString("due") ?: "any") }
+        // The same list opened from Today, My tasks or an alert: a screen of its own, with Back.
+        composable("taskList?due={due}", arguments = listOf(textArg("due", "any"))) { TasksScreen(api, nav, it.arguments?.getString("due") ?: "any") }
+        composable("tasksBulk?q={q}&due={due}", arguments = listOf(textArg("q", ""), textArg("due", "any"))) {
+            BulkCompleteScreen(api, nav, it.arguments?.getString("q") ?: "", it.arguments?.getString("due") ?: "any")
+        }
+        composable("availability") { AvailabilityScreen(api) }
+        composable("privacyIncident?kind={kind}&what={what}", arguments = listOf(textArg("kind"), textArg("what"))) {
+            PrivacyIncidentScreen(api, nav, it.arguments?.getString("kind") ?: "", it.arguments?.getString("what") ?: "")
+        }
         composable("more") { MoreScreen(api, nav) }
-        composable("alerts") { AlertsScreen(api) }
+        composable("alerts") { AlertsScreen(api, nav) }
         composable("referrals") { ReferralsScreen(api, nav) }
         composable("referral/{id}") { ReferralScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("clientEdit/{id}") { ClientEditScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
@@ -360,7 +381,7 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("waitlist") { WaitlistScreen(api) }
         composable("compliance") { ComplianceScreen(api, nav) }
         composable("invoices") { InvoicesScreen(api) }
-        composable("incidents") { IncidentsScreen(api) }
+        composable("incidents") { IncidentsScreen(api, nav) }
         val n = { e: androidx.navigation.NavBackStackEntry, k: String -> e.arguments?.getString(k)?.toIntOrNull() ?: 0 }
         composable("voice/{clientId}/{name}") { VoiceScreen(api, nav, n(it, "clientId"), it.arguments?.getString("name") ?: "") }
         composable("clientAi/{clientId}") { ClientAiScreen(api, nav, n(it, "clientId")) }

@@ -51,6 +51,8 @@ if ($isPost && isset($_POST['sign_now'])) {
     // Nothing left to sign here (expired, withdrawn, signed or gone): the signer is told on the
     // closing page in their language, and hands the device back.
     if ($why !== null) { $_SESSION['kiosk_sign_why'] = signature_reason_in($why, $docLang, (string)($s['signer_name'] ?? '')); redirect($here . '&signed=0'); }
+    // The administrators are told, as when it is signed in the apps or from the email link (4.36.0).
+    signature_signed_notice($s, (string)$client['name'], true);
     redirect($here . '&signed=1');
 }
 // The device is still in the signer's hands (4.25.0): a page with nothing to follow. Any other page signs out.

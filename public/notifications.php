@@ -9,23 +9,11 @@ $user = require_login();
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_read'])) {
     // Only the alerts that were on the page: older ones beyond the 100 shown,
     // and any that arrived since, stay unread so they are not dismissed unseen.
-    $ids = array_slice(array_values(array_unique(array_filter(array_map('intval',
-        explode(',', is_string($_POST['ids'] ?? null) ? $_POST['ids'] : '')), fn($i) => $i > 0))), 0, 100);
-    $marked = 0;
-    if ($ids) {
-        // One timestamp for the whole batch, so Undo puts back exactly these.
-        $stamp = date('Y-m-d H:i:s');
-        $mr = db()->prepare('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN ('
-            . implode(',', array_fill(0, count($ids), '?')) . ')');
-        $mr->execute(array_merge([$stamp, (int)$user['id']], $ids));
-        $marked = $mr->rowCount();
-        if ($marked) $_SESSION['alerts_undo'] = ['ids' => $ids, 'stamp' => $stamp, 'count' => $marked, 'at' => time()];
-    }
-    $left = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read_at IS NULL');
-    $left->execute([(int)$user['id']]);
-    $left = (int)$left->fetchColumn();
-    flash($marked . ' alert' . ($marked === 1 ? '' : 's') . ' marked as read.'
-        . ($left ? ' ' . $left . ' more unread alert' . ($left === 1 ? ' is' : 's are') . ' listed now.' : ''));
+    // One timestamp for the whole batch, so Undo puts back exactly these (inc/alerts.php, shared with the apps).
+    $ids = alerts_ids($_POST['ids'] ?? '');
+    $r = alerts_mark_read((int)$user['id'], $ids);
+    if ($r['marked']) $_SESSION['alerts_undo'] = ['ids' => $r['ids'], 'stamp' => $r['stamp'], 'count' => $r['marked'], 'at' => time()];
+    flash(alerts_marked_message($r['marked'], $r['left']));
     redirect('notifications.php');
 }
 
@@ -36,14 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['undo_mark_read'])) {
     unset($_SESSION['alerts_undo']);
     $restored = 0;
     if (is_array($undo) && time() - (int)($undo['at'] ?? 0) <= 900 && !empty($undo['ids'])) {
-        $uids = array_map('intval', (array)$undo['ids']);
-        $ur = db()->prepare('UPDATE notifications SET read_at = NULL WHERE user_id = ? AND read_at = ? AND id IN ('
-            . implode(',', array_fill(0, count($uids), '?')) . ')');
-        $ur->execute(array_merge([(int)$user['id'], (string)$undo['stamp']], $uids));
-        $restored = $ur->rowCount();
+        $restored = alerts_undo((int)$user['id'], (array)$undo['ids'], (string)$undo['stamp']);
     }
-    flash($restored ? $restored . ' alert' . ($restored === 1 ? ' is' : 's are') . ' unread again.'
-        : 'There was nothing to undo: alerts can be marked unread again for 15 minutes after marking them read.', $restored ? 'success' : 'error');
+    flash(alerts_undo_message($restored), $restored ? 'success' : 'error');
     redirect('notifications.php');
 }
 $undoMark = $_SESSION['alerts_undo'] ?? null;

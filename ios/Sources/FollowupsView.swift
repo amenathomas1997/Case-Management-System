@@ -36,12 +36,18 @@ struct FollowupsView: View {
 
             if let d = data {
                 Section {
-                    HStack {
-                        statPill(d.retention != nil ? "\(d.retention!)%" : "—", "Still in use")
-                        statPill("\(d.abandoned)", "No longer used")
-                        statPill("\(d.completed)", "Checks done")
+                    // 4.36.0: the website's four tiles and their words, two by two.
+                    Grid(horizontalSpacing: 8, verticalSpacing: 12) {
+                        GridRow {
+                            statPill("\(d.dueTotal ?? d.due.count)", "Due now")
+                            statPill("\(d.upcomingTotal ?? d.upcoming.count)", "Upcoming")
+                        }
+                        GridRow {
+                            statPill(d.retention != nil ? "\(d.retention!)%" : "—", followupRetentionLabel(d.completed))
+                            statPill("\(d.abandoned)", "Flagged abandoned")
+                        }
                     }
-                    // The three figures are one VoiceOver stop.
+                    // The four figures are one VoiceOver stop.
                     .accessibilityElement(children: .combine)
                 } footer: {
                     Text("Post-provision checks that loaned assistive technology is still being used. Scheduled automatically after a device goes out.")
@@ -57,14 +63,11 @@ struct FollowupsView: View {
                     Section("Upcoming") { ForEach(d.upcoming) { f in followupRow(f, due: false) } }
                 }
                 if !d.recent.isEmpty {
-                    Section("Recently recorded") {
+                    Section("Recently recorded (\(d.recent.count))") {
                         ForEach(d.recent) { f in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(f.equipmentName).font(.body.weight(.semibold))
-                                Text("\(f.clientName) · \(f.status)\(f.inUse != nil ? (f.inUse == 1 ? " · in use" : " · not in use") : "")")
-                                    .font(.caption).foregroundStyle(Color.secondaryText)
-                            }.padding(.vertical, 1)
-                            .accessibilityElement(children: .combine)
+                            // "<client>, <device>, <n>-day: <outcome>", the website's words (4.36.0).
+                            Text(recentFollowupLine(f))
+                                .padding(.vertical, 1)
                         }
                     }
                 }
@@ -411,4 +414,18 @@ struct SaveFollowupResponse: Decodable {
         warning = (text ?? "").isEmpty ? nil : text
         abandoned = (try? c.decodeIfPresent(Bool.self, forKey: .abandoned)) ?? nil
     }
+}
+
+/// "Still in use (of 12 checks answered yes or no)", as the website's tile (4.36.0).
+func followupRetentionLabel(_ answered: Int) -> String {
+    "Still in use" + (answered > 0 ? " (of \(answered) check\(answered == 1 ? "" : "s") answered yes or no)" : "")
+}
+
+/// A recorded check as the website's Recently recorded table reads it (4.36.0): the server's
+/// outcome words, or the status from an older server.
+func recentFollowupLine(_ f: Followup) -> String {
+    let outcome = (f.outcome ?? "").isEmpty
+        ? f.status + (f.inUse != nil ? (f.inUse == 1 ? " · in use" : " · not in use") : "")
+        : f.outcome!
+    return "\(f.clientName), \(f.equipmentName), \(f.intervalDays)-day: \(outcome)"
 }

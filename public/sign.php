@@ -88,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$doc['signed_at'] && empty($doc['w
         }
         unset($_SESSION[$sigKey]);
         if (signature_sign($doc, $signature)) {
-            notify_admin_users('Signed: ' . $doc['title'] . ' for ' . $doc['client_name'], 'signatures.php?client=' . (int)$doc['client_id']);
+            signature_signed_notice($doc, (string)$doc['client_name'], false);
             flash_ui('Your signature was recorded. Thank you.');
         }
         redirect('sign.php?t=' . $token);

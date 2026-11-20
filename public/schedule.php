@@ -392,6 +392,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || i
 }
 
 /* ---- POST: update session status (Completed logs hours to the track) ---- */
+/* The front desk checks a client in (4.36.0), as the apps do: the shared session_check_in()
+   (inc/session_changes.php) with the page's caseload scope, from 30 minutes before the start. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_in'])) {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $ci = session_check_in($sid, (int)$user['id'], caseload_scoped() ? (int)$user['id'] : null, null, 'web');
+    flash($ci['ok'] ? $ci['message'] : $ci['error'], $ci['ok'] ? 'success' : 'error');
+    redirect('schedule.php#s-' . $sid);
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $sid = (int)($_POST['session_id'] ?? 0);
     // Beside the plain outcomes: "Completed — hours already logged" (links the work
@@ -659,6 +667,11 @@ function session_row(array $s, string $csrf): void {
           if ($s['status'] === 'Completed' && !empty($s['note_pending'])): ?><br><strong>Note not written yet</strong><?php if (can('clients')): ?> <a href="<?= h(sessnote_editor_url((int)$s['client_id'], (int)$s['id'])) ?>">Write it now<span class="visually-hidden">: the case note for the <?= $which ?></span></a><?php endif; endif; ?></td>
       <td>
         <?php if ($s['status'] === 'Scheduled'): ?>
+        <?php if (session_check_in_open($s)): // 4.36.0: the client has arrived ?>
+        <form method="post" action="schedule.php" class="inline-form"><?= csrf_field() ?><input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>">
+          <button type="submit" name="check_in" value="1" class="btn btn-secondary btn-sm">Check in<span class="visually-hidden"> <?= $which ?></span></button>
+        </form>
+        <?php endif; ?>
         <form method="post" action="schedule.php" class="inline-form">
           <?= csrf_field() ?>
           <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>">

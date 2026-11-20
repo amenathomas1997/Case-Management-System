@@ -52,11 +52,13 @@ function api_more(string $action, array $input, int $userId): ?array {
             return ['ok' => true, 'signature_id' => $sid, 'message' => 'Signed. A copy is kept with your account, and you are asked again in a year or if the text changes.'];
         }
         case 'agreement_copy': {
-            $q = db()->prepare('SELECT id, title, body, version, signed_name, signed_at FROM staff_agreement_signatures WHERE id = ? AND user_id = ?');
+            $q = db()->prepare('SELECT id, agreement_id, title, body, version, signed_name, signed_at FROM staff_agreement_signatures WHERE id = ? AND user_id = ?');
             $q->execute([(int)($input['id'] ?? $_GET['id'] ?? 0), $userId]);
             $c = $q->fetch();
             if (!$c) return ['ok' => false, 'error' => 'That signed copy was not found.', 'status' => 404];
-            return ['ok' => true, 'copy' => ['id' => (int)$c['id'], 'title' => $c['title'], 'body' => $c['body'], 'version' => (int)$c['version'], 'signed_name' => $c['signed_name'], 'signed_at' => $c['signed_at']]];
+            // corrections_text (4.36.0): the small corrections made after signing, as agreements.php says them.
+            return ['ok' => true, 'copy' => ['id' => (int)$c['id'], 'title' => $c['title'], 'body' => $c['body'], 'version' => (int)$c['version'], 'signed_name' => $c['signed_name'], 'signed_at' => $c['signed_at'],
+                'corrections_text' => staff_agreement_corrections_text($c)]];
         }
         // Staff training (4.16.0): the reading and questions, never which answer is right.
         case 'training': {
@@ -88,14 +90,26 @@ function api_more(string $action, array $input, int $userId): ?array {
         case 'save_credential': {
             $cid = (int)($input['id'] ?? 0);
             if ($cid > 0) { $q = db()->prepare('SELECT id FROM staff_credentials WHERE id = ? AND user_id = ?'); $q->execute([$cid, $userId]); if (!$q->fetchColumn()) return ['ok' => false, 'error' => 'That credential was not found.', 'status' => 404]; }
-            $s = fn(string $k): string => is_string($input[$k] ?? null) ? trim($input[$k]) : '';
-            $name = $s('name');
-            if ($name === '' || mb_strlen($name) > 120) return ['ok' => false, 'error' => 'Name the credential (120 characters or fewer).', 'status' => 422];
-            $issued = $s('issued_on') === '' ? null : valid_date($s('issued_on'), 1950, (int)date('Y'));
-            $expires = $s('expires_on') === '' ? null : valid_date($s('expires_on'), 1950, (int)date('Y') + 20);
-            if (($s('issued_on') !== '' && $issued === null) || ($s('expires_on') !== '' && $expires === null)) return ['ok' => false, 'error' => 'Enter the dates as year-month-day (issued not in the future).', 'status' => 422];
-            if ($issued && $expires && $expires < $issued) return ['ok' => false, 'error' => 'The expiry date is before the date issued.', 'status' => 422];
-            $vals = [$name, mb_substr($s('number'), 0, 80) ?: null, mb_substr($s('issuer'), 0, 120) ?: null, $issued, $expires, mb_substr($s('notes'), 0, 255) ?: null];
+            if (array_key_exists('type', $input)) {
+                // A 4.36.0 app (it sends type): checked as credentials.php checks it
+                // (inc/staff_credentials.php), each refusal on its field.
+                $checked = staff_credential_input($input);
+                if ($checked['errors']) return api_435_fields($checked['errors']);
+                $name = $checked['name'];
+                $expires = $checked['vals'][4];
+                $vals = $checked['vals'];
+            } else {
+                // A 4.35.0 app (name only): its rules as before 4.36.0, long values cut to length,
+                // so an older form is never refused for something it could not show.
+                $s = fn(string $k): string => is_string($input[$k] ?? null) ? trim($input[$k]) : '';
+                $name = $s('name');
+                if ($name === '' || mb_strlen($name) > 120) return ['ok' => false, 'error' => 'Name the credential (120 characters or fewer).', 'status' => 422];
+                $issued = $s('issued_on') === '' ? null : valid_date($s('issued_on'), 1950, (int)date('Y'));
+                $expires = $s('expires_on') === '' ? null : valid_date($s('expires_on'), 1950, (int)date('Y') + 20);
+                if (($s('issued_on') !== '' && $issued === null) || ($s('expires_on') !== '' && $expires === null)) return ['ok' => false, 'error' => 'Enter the dates as year-month-day (issued not in the future).', 'status' => 422];
+                if ($issued && $expires && $expires < $issued) return ['ok' => false, 'error' => 'The expiry date is before the date issued.', 'status' => 422];
+                $vals = [$name, mb_substr($s('number'), 0, 80) ?: null, mb_substr($s('issuer'), 0, 120) ?: null, $issued, $expires, mb_substr($s('notes'), 0, 255) ?: null];
+            }
             // A field the app did not send (notes, from an app that does not show them) keeps its value.
             if ($cid > 0) db()->prepare('UPDATE staff_credentials SET name = ?, number = ?, issuer = ?, issued_on = ?, expires_on = ?' . (array_key_exists('notes', $input) ? ', notes = ?' : '') . ', updated_at = NOW() WHERE id = ?')
                 ->execute(array_merge(array_key_exists('notes', $input) ? $vals : array_slice($vals, 0, 5), [$cid]));

@@ -20,19 +20,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_hours'])) {
     // The same Add sent twice (4.29.0) adds the hours once, instead of answering the second with "overlap".
     $hoursKey = web_idem_key($_POST);
     if (web_once_get($hoursKey) !== null) { flash('Hours added. (The form was sent twice, so they were added once.)', 'info'); redirect($back); }
-    $err = availability_add($who, $str('weekday'), $str('from'), $str('to'), $str('mode') !== 'in_person', $str('location'));
+    // Checked, saved and audited by the helper the apps use too (inc/self_booking.php, 4.36.0).
+    $err = availability_add_for($who, $_POST, (int)$user['id']);
     if ($err !== null) { keep_input(); keep_field_errors([$err[0] => $err[1]]); redirect($back . '#add-h'); }
     web_once_set($hoursKey, $who);
-    audit((int)$user['id'], 'availability.add', 'user', $who, $str('weekday') . ' ' . $str('from') . '-' . $str('to'));
     flash('Hours added.');
     redirect($back);
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_hours'])) {
-    $d = db()->prepare('DELETE FROM staff_availability WHERE id = ? AND user_id = ?');
-    $d->execute([(int)$_POST['remove_hours'], $who]);
     // From an older page, for hours already removed: said, not reported as done (4.29.0).
-    if (!$d->rowCount()) { flash('Nothing was removed: those hours were already removed.', 'error'); redirect($back); }
-    audit((int)$user['id'], 'availability.remove', 'user', $who, '#' . (int)$_POST['remove_hours']);
+    if (!availability_remove($who, (int)$_POST['remove_hours'], (int)$user['id'])) { flash('Nothing was removed: those hours were already removed.', 'error'); redirect($back); }
     flash('Hours removed. Sessions already booked in them stay booked.');
     redirect($back);
 }
@@ -56,7 +53,7 @@ page_header($title, $user, 'account', [['account.php', 'My Account']]);
 ?>
 <h1><?= h($title) ?></h1>
 <?php if (!(int)$person['is_active']): ?><p><strong>This account is switched off, so its clients cannot book these hours until it is switched on again.</strong></p><?php endif; ?>
-<p>The hours you take sessions. <?= $cfg['on'] ? 'Your clients see the open times in these hours in their portal and can book one: a time is open when you have no session then, your Outlook calendar is free (if you connected it on My Account), it is at least ' . $cfg['notice_hours'] . ' hours ahead, and the client\'s authorization covers it.' : 'Self-booking is off, so clients do not see them yet' . ($isAdmin ? ' (turn it on below).' : '; an administrator turns it on.') ?></p>
+<p><?= availability_intro($person, $who === (int)$user['id'], $isAdmin) ?></p>
 
 <section class="card" aria-labelledby="hours-h">
   <h2 id="hours-h">Hours (<?= count($hours) ?>)</h2>

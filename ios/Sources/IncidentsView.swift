@@ -7,6 +7,8 @@ struct IncidentsView: View {
     @State private var error: String?
     @State private var showClosed = false
     @State private var adding = false
+    /// The privacy incident report being written (4.36.0).
+    @State private var reportingPrivacy: PrivacyIncidentPrefill?
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
     /// An incident whose closing is waiting for confirmation: it leaves the open list.
@@ -34,6 +36,15 @@ struct IncidentsView: View {
                     ErrorBanner(message: error).listRowSeparator(.hidden)
                         .id(errorRow)
                         .accessibilityFocused($focusedIncident, equals: errorFocus)
+                }
+                // Visible buttons, not only the toolbar's Report (4.36.0): a privacy breach is
+                // reported here too, as on the website's Privacy incidents page.
+                Button { adding = true } label: { Label("Report an incident", systemImage: "plus") }
+                    .disabled(data == nil)
+                if api.can("clients") {
+                    Button { reportingPrivacy = PrivacyIncidentPrefill() } label: {
+                        Label("Report a privacy incident", systemImage: "lock.shield")
+                    }
                 }
                 if let d = data {
                     if d.incidents.isEmpty {
@@ -150,6 +161,9 @@ struct IncidentsView: View {
         }
         .sheet(isPresented: $adding, onDismiss: announceSheetResult) {
             AddIncidentSheet(types: data?.types ?? [], severities: data?.severities ?? []) { sheetResult = "Incident saved."; Task { await load() } }
+        }
+        .sheet(item: $reportingPrivacy, onDismiss: announceSheetResult) { prefill in
+            PrivacyIncidentSheet(prefill: prefill) { message in sheetResult = message }
         }
         .refreshable { await load() }
         .task { await load() }
@@ -331,5 +345,176 @@ struct AddIncidentSheet: View {
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this incident was logged. Check the incidents list for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before logging it again.", in: &self.error)
         } catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
+    }
+}
+
+// MARK: - Privacy incidents (4.36.0)
+
+/// What a privacy incident report starts with (from Account after a phone is reported lost).
+struct PrivacyIncidentPrefill: Identifiable {
+    let id = UUID()
+    var kind = ""
+    var what = ""
+}
+
+/// privacy_incident_choices: the website's kinds and the clients this person may name.
+struct PrivacyIncidentChoices: Decodable {
+    let kinds: [String]
+    let clients: [PrivacyIncidentClient]
+    private enum CodingKeys: String, CodingKey { case kinds, clients }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        kinds = try c.decode([String].self, forKey: .kinds)
+        clients = (try? c.decode([PrivacyIncidentClient].self, forKey: .clients)) ?? []
+    }
+}
+
+struct PrivacyIncidentClient: Decodable {
+    let id: Int
+    let name: String
+}
+
+struct PrivacyIncidentReply: Decodable {
+    let id: Int?
+    let noticeDeadline: String?
+    let message: String
+}
+
+/// Report a possible privacy breach, as the website's Privacy incidents form: an administrator
+/// is told and assesses it there (assessment, notices and closing stay on the website).
+struct PrivacyIncidentSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    var prefill = PrivacyIncidentPrefill()
+    let onReported: (String) -> Void
+
+    @State private var choices: PrivacyIncidentChoices?
+    @State private var kind = ""
+    @State private var discovered = Date()
+    @State private var knowsOccurred = false
+    @State private var occurred = Date()
+    @State private var clientId: Int?
+    @State private var what = ""
+    @State private var info = ""
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+    @State private var started = false
+    @State private var confirmingDiscard = false
+
+    private var hasTypedText: Bool {
+        [what, info].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section {
+                    Text("Report a possible privacy breach here: a report or email sent to the wrong person, a lost phone or laptop, someone seeing a record they should not, or a wrong portal link. An administrator assesses it.")
+                }
+                if let choices {
+                    Section {
+                        Picker("Kind (required)", selection: $kind) {
+                            Text("Choose a kind").tag("")
+                            ForEach(choices.kinds, id: \.self) { Text($0).tag($0) }
+                        }
+                        .errorField("Kind")
+                        DatePicker("Date discovered (required)", selection: $discovered, in: ...Date(), displayedComponents: .date)
+                            .errorField("Date discovered")
+                        Toggle("Date it happened, if known", isOn: $knowsOccurred)
+                        if knowsOccurred {
+                            DatePicker("Date it happened", selection: $occurred, in: ...Date(), displayedComponents: .date)
+                                .errorField("Date it happened")
+                        }
+                        NewRecordClientPicker(title: "Client affected, if one", noneLabel: "None", includeClosed: true,
+                                              selection: $clientId, errorName: "Client affected",
+                                              preset: choices.clients.map { ClientRow(id: $0.id, name: $0.name, status: "", phone: nil, email: nil) })
+                        CaptionedField(label: "What happened (required)", text: $what, lines: 3...10, errorName: "What happened")
+                        CaptionedField(label: "Information involved", text: $info, lines: 1...4, errorName: "Information involved")
+                    }
+                    Section {
+                        Button { Task { await save() } } label: {
+                            Text(busy ? "Reporting…" : "Report incident").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .disabled(busy)
+                        .accessibilityLabel("Report incident")
+                    }
+                } else if error == nil {
+                    ProgressView("Loading…")
+                }
+            }
+            .navigationTitle("Report a privacy incident")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { requestClose() }.disabled(busy) }
+            }
+            .interactiveDismissDisabled(busy || hasTypedText)
+            .accessibilityAction(.escape) { requestClose() }
+            .confirmationDialog("Discard this privacy incident report? What you typed will be lost.",
+                                isPresented: $confirmingDiscard, titleVisibility: .visible) {
+                Button("Discard report", role: .destructive) { dismiss() }
+                Button("Keep editing", role: .cancel) {}
+            }
+            .task {
+                guard !started else { return }
+                started = true
+                what = prefill.what
+                await load()
+            }
+        }
+    }
+
+    private func requestClose() {
+        guard !busy else { return }
+        // One rule for Cancel, the escape gesture and swipe-down: any text in the report (typed or
+        // prefilled) asks first.
+        if hasTypedText { confirmingDiscard = true } else { dismiss() }
+    }
+
+    private func load() async {
+        do {
+            let r: PrivacyIncidentChoices = try await api.call("privacy_incident_choices")
+            choices = r
+            if !prefill.kind.isEmpty, r.kinds.contains(prefill.kind) { kind = prefill.kind }
+        } catch APIError.server(let message) where message == "Unknown action." {
+            showFormError("This server does not offer privacy incident reports from the app yet.", in: &error)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+
+    private func save() async {
+        let description = what.trimmingCharacters(in: .whitespacesAndNewlines)
+        let involved = info.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The server's own sentences, said here first so a slip needs no round trip.
+        if kind.isEmpty { showFormError("Choose what kind of incident it is.", in: &error, field: "Kind"); return }
+        if description.isEmpty { showFormError("Describe what happened.", in: &error, field: "What happened"); return }
+        if description.count > 5000 { showFormError("What happened is too long (5,000 characters maximum).", in: &error, field: "What happened"); return }
+        if involved.count > 500 { showFormError("Keep the information involved to 500 characters or fewer.", in: &error, field: "Information involved"); return }
+        busy = true
+        error = nil
+        defer { busy = false }
+        var body: [String: Any] = ["kind": kind, "discovered_on": APIDate.day(discovered),
+                                   "occurred_on": knowsOccurred ? APIDate.day(occurred) : "",
+                                   "client_id": clientId ?? 0, "description": description, "info_involved": involved]
+        body["idem_key"] = idem.key(for: body)
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: PrivacyIncidentReply = try await api.call("report_privacy_incident", method: "POST", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            onReported(r.message)
+            dismiss()
+        } catch APIError.server(let message) {
+            idem.answered()
+            let names = ["kind": "Kind", "discovered_on": "Date discovered", "occurred_on": "Date it happened",
+                         "client_id": "Client affected", "description": "What happened", "info_involved": "Information involved"]
+            let order = ["kind", "discovered_on", "occurred_on", "client_id", "description", "info_involved"]
+            showFormError(message, in: &self.error, field: order.first { refusedFields[$0] != nil }.flatMap { names[$0] })
+        } catch {
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error), in: &self.error)
+        }
     }
 }

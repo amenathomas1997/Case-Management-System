@@ -146,8 +146,8 @@ dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.35.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "66"') == 2,
-             'the app and widget are version 4.35.0 (66)')
+static_check(project_yml.count('MARKETING_VERSION: "4.36.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "67"') == 2,
+             'the app and widget are version 4.36.0 (67)')
 
 # 4.34.0: the iPhone app behaves as the website does (PARITY-AUDIT-2026-11-19, plan P1-P43; static).
 api_swift = swift_sources['API.swift']
@@ -666,6 +666,422 @@ static_check('status409 = (reply["changed"] as? Bool) == true' in invoices_swift
 reservation_sheet = equipment_swift[equipment_swift.index('struct ReservationSheet: View {'):]
 static_check('if hasUntil && hasFrom && APIDate.day(until) < APIDate.day(from) {' in reservation_sheet and 'Needed until: choose the day' in reservation_sheet,
              'P38: Needed until before Needed from is refused on the phone, tied to Needed until')
+
+# 4.36.0: the daily workspace and safety in the iPhone app (plan-4360, IPHONE parts of R1-R26;
+# static). Each check reads the request the app sends and the reply keys it reads, and that the
+# server files send and read the same keys.
+def php(path):
+    p = root / 'public' / path
+    return p.read_text() if p.exists() else ''
+
+
+def no_hint(text):
+    return '.accessibilityHint(' not in text
+
+
+def php_case(text, name):
+    """One `case 'name':` block of a PHP switch, up to the next case at the same indentation."""
+    m = re.search(r"\n([ \t]*)case '%s':" % re.escape(name), text)
+    if not m:
+        return ''
+    rest = text[m.end():]
+    nxt = re.search(r"\n%s(?:case '|default:)" % re.escape(m.group(1)), rest)
+    return text[m.start():m.end() + (nxt.start() if nxt else len(rest))]
+
+
+def php_function(text, name):
+    """The body of a PHP function, from its signature to the closing brace at the start of a line."""
+    i = text.find('function %s(' % name)
+    return text[i:text.index('\n}\n', i) + 3] if i >= 0 else ''
+
+
+def swift_func(text, signature):
+    """A Swift function from its signature to its closing brace at the signature's indentation."""
+    i = text.index(signature)
+    indent = text[text.rindex('\n', 0, i) + 1:i]
+    indent = indent[:len(indent) - len(indent.lstrip())]
+    return text[i:text.index('\n' + indent + '}\n', i) + len(indent) + 2]
+
+
+def announced_once(fn):
+    """The function says its result once: one announce call (errors go through showFormError)."""
+    return len(re.findall(r'\bannounce(?:AfterDismiss)?\(', fn)) == 1
+
+
+def outside_one_stop(fn, element_open, buttons):
+    """`buttons` sit after the block that carries .accessibilityElement (the row's one stop), at
+    the same nesting level, and none is inside it (read from the indentation, not text order)."""
+    lines = fn.split('\n')
+    start = next(i for i, l in enumerate(lines) if element_open in l)
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    close = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == '}' and len(lines[i]) - len(lines[i].lstrip()) == indent)
+    inner = '\n'.join(lines[start + 1:close])
+    chain_end = close + 1
+    while chain_end < len(lines) and (lines[chain_end].strip().startswith('.') or lines[chain_end].strip().startswith('//')
+                                      or len(lines[chain_end]) - len(lines[chain_end].lstrip()) > indent):
+        chain_end += 1
+    chain = '\n'.join(lines[close:chain_end])
+    after = '\n'.join(lines[chain_end:])
+    return ('.accessibilityElement(' in chain and 'Button(' not in inner
+            and all(b in after for b in buttons))
+
+
+def model_keys(text, struct):
+    """The CodingKeys cases of a top-level struct (private or not), or its stored `let`/`var`
+    names when it has no CodingKeys (a synthesized Decodable)."""
+    m = re.search(r'\n(?:private )?struct %s: [^\n]*\{\n(.*?)\n\}\n' % re.escape(struct), text, re.S)
+    if not m:
+        return set()
+    body = m.group(1)
+    ck = re.search(r'enum CodingKeys: String, CodingKey \{\s*((?:case [^\n]*\n?\s*)+)\}', body)
+    if ck:
+        return set(k.strip() for k in re.sub(r'\bcase\b', ',', ck.group(1)).replace('\n', ' ').split(',') if k.strip())
+    return set(re.findall(r'(?:let|var) (\w+):', body))
+
+
+api_account_php = php('inc/api_account.php')
+api_436_php = php('inc/api_436.php')
+records_privacy_php = php('inc/records_privacy.php')
+account_swift = swift_sources['AccountView.swift']
+incidents_swift = swift_sources['IncidentsView.swift']
+dashboard_swift = swift_sources['DashboardView.swift']
+tasks_swift = swift_sources['TasksView.swift']
+alerts_swift = swift_sources['NotificationsView.swift']
+messages_swift = swift_sources['MessagesView.swift']
+followups_swift = swift_sources['FollowupsView.swift']
+compliance_swift = swift_sources['ComplianceView.swift']
+login_swift = swift_sources['LoginView.swift']
+agreements_swift = swift_sources['AgreementsView.swift']
+training_swift = swift_sources['TrainingView.swift']
+search_swift = swift_sources['SearchView.swift']
+
+# R1: phones signed in to the app.
+phones = between(account_swift, '@ViewBuilder private func phonesSection(', '} header: { sectionHeader("Phones signed in to the app") }\n        }\n    }')
+device_action = swift_func(account_swift, 'private func deviceAction(_ device: AppDevice, lost: Bool) async {')
+lost_sheet = between(account_swift, 'private struct ReportLostSheet: View {', '\n}\n')
+lost_report = swift_func(lost_sheet, 'private func report() async {')
+device_case = php_case(api_account_php, 'device_action')
+devices_fn = php_function(api_436_php + api_account_php, 'api_account_devices')
+static_check('try await api.call("app_devices")' in account_swift
+             and 'var body: [String: Any] = ["device_id": device.id, "lost": lost]' in device_action and 'password' not in device_action
+             and 'body["idem_key"] = deviceIdem.key(for: body)' in device_action
+             and 'try await api.call("device_action", method: "POST", body: body)' in device_action
+             and 'deviceAction(device, lost: false)' in account_swift and 'deviceAction(device, lost: true)' not in account_swift
+             and model_keys(account_swift, 'AppDevice') >= {'id', 'name', 'text', 'thisPhone', 'canSignOut', 'canReportLost'}
+             and sends(devices_fn, 'id', 'name', 'text', 'this_phone', 'can_sign_out', 'can_report_lost')
+             and sends(php_case(api_account_php, 'app_devices'), 'intro', 'devices') and sends(device_case, 'lost', 'message', 'devices')
+             and 'app_device_action(' in device_case and 'function app_device_line(' in records_privacy_php,
+             'R1: app_devices and device_action are sent and read as those actions answer; plain sign-out sends no password')
+static_check('var body: [String: Any] = ["device_id": device.id, "lost": true]' in lost_report
+             and lost_report.index('body["idem_key"] = idem.key(for: body)') < lost_report.index('body["password"] = password')
+             and lost_report.index('body["password"] = password') < lost_report.index('password = ""') < lost_report.index('try await api.call("device_action"')
+             and '"Enter your password to confirm this change. Nothing was changed."' in lost_report
+             and '@AppStorage' not in lost_sheet and 'DraftStore' not in lost_sheet
+             and 'try await api.call("device_action", method: "POST", body: body, refusal:' in lost_report
+             and 'refusedFields["password"] ?? message' in lost_report and 'field: refusedFields["password"] != nil ? "Your password" : nil' in lost_report
+             and 'SecureCaptionedField(label: "Your password (required)", text: $password, content: .password)' in lost_sheet
+             and '.errorField("Your password")' in lost_sheet and no_hint(lost_sheet)
+             and re.search(r"if \(\$lost\) \{\s*\$pwErr = api_account_reauth\(\$userId, \$input\['password'\]", device_case)
+             and "'password' => $pwErr" in device_case,
+             'R1: Report lost and wipe sends the account password (never kept, not in the retry key), and its refusal is said on that field')
+static_check(re.search(r'canSignOut = !thisPhone && ', account_swift) and re.search(r'canReportLost = !thisPhone && ', account_swift)
+             and device_case.index("$devId === (int)$tok['id']") < device_case.index('app_device_action(')
+             and 'This is the phone you are using. Use Sign out to sign out of it.' in device_case
+             and "'can_sign_out' => !$this_phone" in devices_fn and "'can_report_lost' => !$this_phone" in devices_fn,
+             'R1: the phone in use is never offered Sign out or Report lost (app and server), and the server refuses it before acting')
+static_check(all(t in account_swift for t in ('"Phones signed in to the app"', 'Button("Sign out \\(device.name)")',
+                                              'Button("Report lost and wipe \\(device.name)", role: .destructive)',
+                                              '"Sign \\($0.name) out of the app?"', 'Button("Sign it out", role: .destructive)',
+                                              '"Whoever uses it has to sign in again. Entries not yet sent from it stay on it."',
+                                              'Text("Report \\(device.name) lost?")', 'Text(busy ? "Reporting…" : "Report lost and wipe")',
+                                              'Entries not yet sent are lost.', '"Not signed in to the mobile app on any phone."',
+                                              'Text("Phones signed in to the app: \\(s.appSessions)")',
+                                              'Button("Report a privacy incident for \\(lostDeviceName)")',
+                                              'PrivacyIncidentPrefill(kind: "Lost or stolen device", what: "\\(lostDeviceName) was lost or stolen.")'))
+             and no_hint(phones) and '.accessibilityActions' not in phones
+             and outside_one_stop(phones, 'VStack(alignment: .leading, spacing: 2) {', ['Button("Sign out \\(device.name)")', 'Button("Report lost and wipe \\(device.name)"']),
+             'R1: the phones section reads as the website (the count on an older server); each phone\'s buttons are outside its one stop, none rotor-only')
+static_check(announced_once(device_action) and 'announceAfterDismiss(message)' in account_swift and 'announce(' not in lost_report,
+             'R1: a phone\'s sign-out or lost report is said once')
+
+# R2: report a privacy incident.
+privacy_sheet = between(incidents_swift, 'struct PrivacyIncidentSheet: View {', '\n}\n')
+privacy_save = between(privacy_sheet, 'private func save() async {', '\n    }\n')
+static_check('try await api.call("privacy_incident_choices")' in privacy_sheet
+             and all(k in privacy_save for k in ('"kind": kind', '"discovered_on": APIDate.day(discovered)',
+                                                  '"occurred_on": knowsOccurred ? APIDate.day(occurred) : ""', '"client_id": clientId ?? 0',
+                                                  '"description": description', '"info_involved": involved', 'body["idem_key"] = idem.key(for: body)'))
+             and 'try await api.call("report_privacy_incident", method: "POST", body: body, refusal:' in privacy_save
+             and all(k in privacy_save for k in ('"kind": "Kind"', '"discovered_on": "Date discovered"', '"occurred_on": "Date it happened"',
+                                                  '"client_id": "Client affected"', '"description": "What happened"', '"info_involved": "Information involved"'))
+             and "'report_privacy_incident' => 'clients'" in api_436_php
+             and sends(php_case(api_436_php, 'privacy_incident_choices'), 'kinds', 'clients')
+             and sends(php_case(api_436_php, 'report_privacy_incident'), 'notice_deadline', 'message')
+             and all("'%s'" % k in php_case(api_436_php, 'report_privacy_incident') for k in ('kind', 'discovered_on', 'occurred_on', 'description', 'info_involved', 'client_id'))
+             and 'privacy_incident_report(' in php('privacy_incidents.php'),
+             'R2: the privacy incident report sends the website\'s fields and ties each refusal to its field')
+static_check(all(t in incidents_swift for t in ('"Report a privacy incident"', '"Kind (required)"', 'Text("Choose a kind").tag("")',
+                                                '"Date discovered (required)"', '"Date it happened, if known"', 'title: "Client affected, if one", noneLabel: "None"',
+                                                'label: "What happened (required)"', 'label: "Information involved"', '"Report incident"',
+                                                'An administrator assesses it.', '"Choose what kind of incident it is."', '"Describe what happened."',
+                                                '"What happened is too long (5,000 characters maximum)."',
+                                                '"Keep the information involved to 500 characters or fewer."'))
+             and no_hint(privacy_sheet) and "'Choose what kind of incident it is.'" in records_privacy_php
+             and 'if hasTypedText { confirmingDiscard = true } else { dismiss() }' in privacy_sheet
+             and '.interactiveDismissDisabled(busy || hasTypedText)' in privacy_sheet
+             and '"Discard this privacy incident report? What you typed will be lost."' in privacy_sheet,
+             'R2: the privacy incident form has the website\'s fields, order and sentences, with no hint')
+
+# R3: mobile number and alert emails.
+mobile = between(account_swift, '@ViewBuilder private func mobileSection(', '} header: { sectionHeader("How alerts reach you") }')
+alert_save = between(account_swift, 'private func saveAlertSettings(_ body: [String: Any]) async {', '\n    }\n')
+static_check('saveAlertSettings(["mobile": mobileText.trimmingCharacters(in: .whitespacesAndNewlines),' in mobile
+             and '"alert_sms": s.smsEnabled == true && alertSmsOn])' in mobile
+             and 'saveAlertSettings(["alert_email": alertEmailChoice])' in mobile
+             and 'try await api.call("save_alert_settings", method: "POST", body: body, refusal:' in alert_save
+             and 'refusedFields["mobile"] != nil ? "Mobile number"' in alert_save and 'refusedFields["alert_email"] != nil ? "Email me about alerts"' in alert_save
+             and model_keys(account_swift, 'AccountSummary') >= {'mobile', 'alertSms', 'smsEnabled', 'alertEmail', 'alertEmailChoices', 'calendar', 'meetings'}
+             and sends(php_function(api_account_php, 'api_account_alert_fields'), 'mobile', 'alert_sms', 'sms_enabled', 'alert_email')
+             and "'alert_email_choices' =>" in php_case(api_account_php, 'account')
+             and sends(php_case(api_account_php, 'save_alert_settings'), 'message', 'mobile', 'alert_sms', 'alert_email')
+             and "array_key_exists('mobile', $input)" in php_case(api_account_php, 'save_alert_settings')
+             and "array_key_exists('alert_email', $input)" in php_case(api_account_php, 'save_alert_settings')
+             and "'save_alert_settings'" in api_account_php
+             and 'api_account_reauth(' not in between(api_account_php, "case 'save_alert_settings': {", "\n    }\n")
+             and 'account_mobile_save(' in php('account.php') and 'account_alert_email_save(' in php('account.php'),
+             'R3: save_alert_settings sends only the part saved, with no password, and its refusals are tied to the field')
+load_fn = swift_func(account_swift, 'private func load() async {')
+static_check('if !alertFieldsSeeded {' in load_fn and 'if body["mobile"] != nil {' in alert_save
+             and 'if body["alert_email"] != nil { alertEmailChoice' in alert_save and announced_once(alert_save)
+             and 'if let mobileMessage { Text(mobileMessage) }' in account_swift and 'if let alertEmailMessage { Text(alertEmailMessage) }' in account_swift,
+             'R3: a reload never replaces what is being typed; a save resets only its own part, and its result is shown and said once')
+static_check(all(t in mobile for t in ('"Your mobile number"', 'label: "Mobile number (optional; for urgent alerts by text and test texts)"',
+                                       '"Text me when an urgent alert comes in (at most one text every 15 minutes, never with client details)"',
+                                       '"Save mobile number"', 'Picker("Email me about alerts"', '"Save alert emails"', '.textContentType(.telephoneNumber)'))
+             and '("now", "Urgent ones at once, and daily"), ("daily", "Once a day"), ("off", "Never")' in account_swift
+             and no_hint(mobile) and '.onChange' not in mobile,
+             'R3: the mobile and alert sections use the website\'s labels, a quiet picker and no hint')
+
+# R5: calendar and online meetings, read-only.
+connections = between(account_swift, '@ViewBuilder private func connectionsSection(', '} header: { sectionHeader("Calendar and online meetings") }')
+body_order = between(account_swift, 'accountSection(summary)\n', 'passkeySection(summary)')
+static_check([l.strip() for l in body_order.split('\n') if l.strip() and not l.strip().startswith('//')][1:] ==
+             ['passwordSection(summary)', 'twoStepSection(summary)', 'mobileSection(summary)', 'alertEmailSection(summary)',
+              'if summary.canSchedule { calendarSection(summary) }', 'connectionsSection(summary)', 'availabilitySection',
+              'phonesSection(summary)', 'passkeySection(summary)'],
+             'Parity: My account sections follow account.php top to bottom')
+static_check('let rows = (s.meetings ?? []).map(\\.text) + (s.calendar.map { [$0.text] } ?? [])' in connections
+             and '"account.php#calendar-h"' in connections and '"account.php#meetings-h"' in connections and 'hint: nil' in connections
+             and 'text' in model_keys(account_swift, 'AccountCalendarStatus') and 'text' in model_keys(account_swift, 'AccountMeetingStatus')
+             and sends(php('inc/account_actions.php'), 'calendar', 'meetings', 'text', 'provider', 'state')
+             and 'account_connections(' in php('account.php'),
+             'R5: Calendar and online meetings shows the server\'s sentences and links to the website')
+
+# R6: My availability.
+availability = between(account_swift, 'struct AvailabilityView: View {', '\n}\n')
+avail_add = between(availability, 'private func add() async {', '\n    }\n')
+static_check('try await api.call("availability")' in availability
+             and '["weekday": weekday, "from": hhmm(from), "to": hhmm(to), "mode": mode,' in avail_add
+             and '"location": inPerson ? location.trimmingCharacters(in: .whitespacesAndNewlines) : ""' in avail_add
+             and 'body["idem_key"] = idem.key(for: body)' in avail_add and 'f.dateFormat = "HH:mm"' in availability
+             and 'try await api.call("add_availability", method: "POST", body: body, refusal:' in avail_add
+             and '["weekday": "Day", "from": "From", "to": "To", "location": "Where"]' in avail_add
+             and 'try await api.call("remove_availability", method: "POST", body: ["id": block.id])' in availability
+             and sends(php_case(api_436_php, 'availability'), 'intro', 'hours', 'days')
+             and sends(php_case(api_436_php, 'add_availability'), 'message', 'hours') and sends(php_case(api_436_php, 'remove_availability'), 'message', 'hours')
+             and sends(php_function(api_436_php, 'api_436_hours'), 'id', 'text')
+             and all("'%s'" % k in php_case(api_436_php, 'add_availability') for k in ('weekday', 'from', 'to', 'mode', 'location'))
+             and "'availability_add_for(" not in availability and 'availability_add_for(' in php('availability.php') and 'availability_remove(' in php('availability.php'),
+             'R6: availability, add_availability (HH:mm times, retry key) and remove_availability are sent as the server reads them')
+static_check(all(t in availability for t in ('Picker("Day"', 'DatePicker("From"', 'DatePicker("To"', 'Picker("How"', 'Text("Online").tag("online")',
+                                             'Text("In person").tag("in_person")', 'label: "Where, for in person (required)"', '"Add these hours"',
+                                             'AvailabilityView.time(9)', 'AvailabilityView.time(12)', 'if let result { Section { Text(result) } }',
+                                             '"Hours (\\(hours.count))"', 'Text("None yet.")', 'Button("Remove \\(block.text)", role: .destructive)',
+                                             '"Remove \\($0.text)?"', 'Button("Keep them", role: .cancel)', '"Sessions already booked in them stay booked."',
+                                             '.navigationTitle("My availability")'))
+             and 'NavigationLink { AvailabilityView() } label: { Text("My availability") }' in account_swift and no_hint(availability),
+             'R6: My availability has the website\'s fields, steps and confirmation')
+static_check(announced_once(swift_func(availability, 'private func add() async {')) and announced_once(swift_func(availability, 'private func remove(_ block: AvailabilityBlock) async {'))
+             and 'hhmm(from)' in avail_add and 'from = ' not in avail_add,
+             'R6: adding or removing hours is said once and shown; From and To stay as chosen after adding')
+
+# R7: sign-in help.
+api_auth_at = api_php.index('Authentication for everything else') if 'Authentication for everything else' in api_php else -1
+static_check('parts.queryItems = [URLQueryItem(name: "action", value: "sign_in_options")]' in login_swift
+             and 'struct SignInOptions: Decodable { let ok: Bool; let microsoft: Bool }' in login_swift
+             and 'microsoftOnWebsite = options?.ok == true && options?.microsoft == true' in login_swift
+             and 'Authorization' not in swift_func(login_swift, 'private func loadSignInOptions() async {')
+             and '"Signed in with Microsoft on the website? Set a password with Forgot your password first."' in login_swift
+             and "'sign_in_options'" in api_php and 0 <= api_php.index("'sign_in_options'") < api_auth_at
+             and "'microsoft' =>" in api_php
+             and '"This server does not offer privacy incident reports from the app yet."' in incidents_swift
+             and '"This server does not offer My availability in the app yet. Use My availability on the website."' in account_swift
+             and all(t in tasks_swift for t in ('"overdue": "overdue"', '"today": "due today"', '"week": "due in the next 7 days"', '"none": "with no due date"'))
+             and '.task(id: serverAddress) {' in login_swift and 'API.apiURL(fromAddress: serverAddress)' in login_swift,
+             'R7: the sign-in step asks sign_in_options (before the token check) and tells a Microsoft user how to get a password')
+
+# R9-R12: dashboard.
+# The dashboard case adds its 4.36.0 parts from api_dashboard_436() (api.php), read here with it.
+dashboard_case = api_case('dashboard') + (between(api_php, 'function api_dashboard_436(', '\n}\n')
+                                          if 'function api_dashboard_436(' in api_php and 'api_dashboard_436(' in api_case('dashboard') else '')
+static_check(model_keys(api_swift, 'DashboardData') >= {'today', 'todayHeading', 'tasks', 'weekText', 'agreementsNeeded', 'trainingNeeded', 'credentialsDue'}
+             and model_keys(api_swift, 'DashboardTodayItem') >= {'kind', 'count', 'text', 'sessions'}
+             and model_keys(api_swift, 'DashboardTasks') >= {'items', 'total', 'heading'} and 'line' in model_keys(api_swift, 'DashboardTask')
+             and 'clientId' in model_keys(api_swift, 'ExpiringTrack')
+             and sends(dashboard_case, 'today', 'today_heading', 'tasks', 'week_text', 'agreements_needed', 'training_needed', 'credentials_due',
+                       'kind', 'count', 'text', 'sessions', 'items', 'total', 'heading', 'line', 'name', 'words')
+             and 'c.id AS client_id' in dashboard_case
+             and 'dashboard_today(' in dashboard_case and 'dashboard_my_tasks(' in dashboard_case
+             and 'dashboard_today(' in php('index.php') and 'dashboard_my_tasks(' in php('index.php'),
+             'R9-R12: the dashboard reads today, today_heading, tasks, week_text, the banners and client_id as the server sends them')
+static_check(all(t in dashboard_swift for t in ('TasksView(due: "overdue")', 'TasksView(due: "today")', 'case "sessions":', 'case "messages":',
+                                                'case "followups":', 'case "portal_requests":', 'Text("Nothing due today.")', '"Open the task list"',
+                                                'data.weekText', 'credentialsDue', 'NavigationLink { AgreementsView() } label: { dashboardRow("My agreements") }',
+                                                'NavigationLink { TrainingView() } label: { dashboardRow("My training") }',
+                                                '"A credential to renew"', '"\\(creds.count) credentials to renew"', '"Please read it and answer the questions."',
+                                                '"An agreement to sign"', '"\\(n) agreements to sign"', '"Please read and sign it."', '"Please read and sign them."',
+                                                '"Training to take"', '"\\(n) trainings to take"', 'list.map { $0.name + ", " + $0.words }.joined(separator: "; ") + "."',
+                                                'if let clientId = track.clientId, clientId > 0 {'))
+             and not re.search(r'NavigationLink \{ AgreementsView\(\) \} label: \{\s*Text\("Client records open once you finish', dashboard_swift),
+             'R9-R12: Today, My tasks, Your week and the banners open their screens; the hold banner is words plus two links; expiring rows open the client')
+index_php = php('index.php')
+static_check(all(t in index_php for t in ("'A credential to renew'", "' credentials to renew'", "'Training to take'", "' trainings to take'",
+                                          'Please read it and answer the questions.', "'An agreement to sign'", "' agreements to sign'", 'Please read and sign')),
+             'R11: the banner headings and sentences are index.php\'s')
+
+# R13-R15: tasks.
+row_buttons = between(tasks_swift, '@ViewBuilder private func rowButtonList(_ task: TaskItem) -> some View {', '\n    }\n')
+rotor_part = between(tasks_swift, '.accessibilityActions {\n                if !queuedTasks.contains(task.id) {', '\n            }\n')
+bulk = between(tasks_swift, 'struct BulkCompleteSheet: View {', '\n}\n')
+static_check('if wantsDue != "any" { query["due"] = wantsDue }' in tasks_swift and 'Picker("Filter: due date", selection: $due)' in tasks_swift
+             and all(l in tasks_swift for l in ('("any", "Any due date")', '("overdue", "Overdue")', '("today", "Due today (open)")',
+                                                 '("week", "Next 7 days (open)")', '("none", "No due date")'))
+             and '"Showing the first 300 matches. Narrow your filters to find more specific tasks."' in tasks_swift
+             and '"No tasks match these filters."' in tasks_swift
+             and all("'%s'" % v in php('inc/task_filters.php') for v in ('overdue', 'today', 'week', 'none')),
+             'R13: the due filter sends the website\'s values (task_filters) with its labels and sentences')
+row_fn = swift_func(tasks_swift, '@ViewBuilder private func row(_ task: TaskItem) -> some View {')
+static_check(all('Button("%s"' % b in row_buttons for b in ('Open client record', 'Open referral', 'Edit', 'Delete'))
+             and outside_one_stop(row_fn, '            VStack(alignment: .leading, spacing: 4) {', ['rowButtons(task)'])
+             and 'Button("Open referral")' in rotor_part and 'Button("Open client record")' in rotor_part
+             and tasks_swift.index('rowButtons(task)') > tasks_swift.index('.accessibilityActions {\n                if !queuedTasks'),
+             'R14: Open client record, Open referral, Edit and Delete are visible buttons outside the row\'s one stop (and on the rotor)')
+static_check('try await api.call("delete_task", method: "POST", body: ["id": task.id])' in tasks_swift
+             and '"Delete the task “\\($0.title)” permanently?"' in tasks_swift and 'Button("Keep it", role: .cancel)' in tasks_swift
+             and 'var body: [String: Any] = ["task_ids": chosenIds]' in bulk
+             and 'private var chosenIds: [Int] { tasks.map(\\.id).filter { chosen.contains($0) } }' in bulk
+             and '@State private var tasks: [TaskItem]' in bulk and '_tasks = State(initialValue: tasks)' in bulk
+             and 'bulkTasks = openShown' in tasks_swift and 'BulkCompleteSheet(tasks: bulkTasks,' in tasks_swift
+             and 'tasks = await reload()' in bulk and 'if tasks.isEmpty { Text("No open tasks.") }' in bulk
+             and 'body["idem_key"] = idem.key(for: body)' in bulk and 'try await api.call("complete_tasks", method: "POST", body: body)' in bulk
+             and '"Complete the chosen tasks (\\(chosenIds.count))"' in bulk and '"Nothing was completed: choose at least one open task."' in bulk
+             and 'Text("Open tasks")' in bulk and '.navigationTitle("Complete several tasks")' in bulk
+             and 'canDelete' in tasks_swift and sends(php_case(api_parity_php, 'tasks'), 'can_delete')
+             and sends(php_case(api_436_php, 'complete_tasks'), 'completed', 'message') and "$input['task_ids']" in php_case(api_436_php, 'complete_tasks')
+             and "$input['id']" in php_case(api_436_php, 'delete_task')
+             and announced_once(swift_func(tasks_swift, 'private func delete(_ task: TaskItem) async {'))
+             and re.search(r"API_ARRAY_INPUT_KEYS[^;]*'task_ids'", api_php)
+             and 'task_delete(' in php('tasks.php') and 'tasks_bulk_done(' in php('tasks.php'),
+             'R15: delete_task (asked first) and complete_tasks (task_ids, retry key) are sent as the server reads them; the choices are fixed while the sheet is open')
+
+# R16-R17: alerts.
+static_check(all(t in alerts_swift for t in ('case "followups.php":', 'case "schedule.php":', 'return .thread(id, query["channel"] == "counselor" ? "counselor" : "client")',
+                                             'return .tasks(query["due"] ?? "any")', 'case .tasks(let due): TasksView(due: due)',
+                                             'return .referrals', 'case .referrals: ReferralsView()')),
+             'R16: alerts open follow-ups, the schedule, one conversation and the filtered task list, as Android does')
+static_check('try await api.call("mark_notifications_unread", method: "POST",' in alerts_swift
+             and 'body: ["ids": offer.undo.ids, "stamp": offer.undo.stamp]' in alerts_swift
+             and 'undo' in model_keys(alerts_swift, 'AlertsMarked') and 'just marked read as unread again' in alerts_swift
+             and 'Date().timeIntervalSince(madeAt) < AlertsUndoOffer.lifetime' in alerts_swift
+             and sends(php_case(api_parity_php, 'mark_notifications_read'), 'undo', 'ids', 'stamp', 'count')
+             and sends(php_case(api_parity_php, 'mark_notifications_unread'), 'restored', 'message')
+             and "$input['stamp']" in php_case(api_parity_php, 'mark_notifications_unread') and "$input['ids']" in php_case(api_parity_php, 'mark_notifications_unread')
+             and 'alerts_mark_read(' in php('notifications.php') and 'alerts_undo(' in php('notifications.php'),
+             'R17: the undo sends the batch\'s ids and stamp from the server\'s undo, for 15 minutes')
+static_check('static let lifetime: TimeInterval = 15 * 60' in alerts_swift and '.task(id: undoOffer?.madeAt) {' in alerts_swift
+             and 'try? await Task.sleep(nanoseconds: UInt64(offer.secondsLeft * 1_000_000_000))' in alerts_swift
+             and 'if phase == .active, let offer = undoOffer, !offer.stillOffered { undoOffer = nil }' in alerts_swift
+             and 'if let undoOffer, undoOffer.stillOffered {' in alerts_swift
+             and announced_once(swift_func(alerts_swift, 'private func undoMarkRead(_ offer: AlertsUndoOffer) async {')),
+             'R17: the undo button goes at 15 minutes (a timer, and a check on returning to the app); its result is said once')
+
+# R18-R19: messages.
+static_check({'lastBody', 'lastSenderLabel'} <= model_keys(messages_swift, 'MessageThreadSummary')
+             and {'total', 'unreadTotal'} <= model_keys(messages_swift, 'MessageThreadSummaries')
+             and 'unread first, then the most recent' in messages_swift and '"\\(unreadTotal) unread."' in messages_swift
+             and sends(api_case('message_threads'), 'last_body', 'last_sender_label', 'total', 'unread_total')
+             and '$totalUnread ?> unread.' in php('messages.php'),
+             'R18: the conversation list reads the preview and totals the server sends')
+static_check('noticed' in model_keys(messages_swift, 'PostMessageResponse')
+             and '" They were emailed that a message is waiting."' in messages_swift
+             and 'counselorUnconfirmed' in api_swift and 'r.counselorUnconfirmed == true' in messages_swift
+             and sends(api_case('post_message'), 'noticed') and sends(api_case('message_thread'), 'counselor_unconfirmed', 'counselor_unconfirmed_text'),
+             'R19: a sent message says they were emailed; the counselor-unconfirmed sentence shows before typing')
+
+# R20: device follow-ups.
+static_check(all(t in followups_swift for t in ('"Due now"', '"Upcoming"', '"Flagged abandoned"', 'answered yes or no', 'f.outcome',
+                                                '"Recently recorded (\\(d.recent.count))"', '"\\(f.clientName), \\(f.equipmentName), \\(f.intervalDays)-day: \\(outcome)"'))
+             and {'clientReported', 'outcome'} <= model_keys(api_swift, 'Followup')
+             and 'let dueTotal: Int?' in api_swift and 'let upcomingTotal: Int?' in api_swift
+             and sends(api_case('followups'), 'due_total', 'upcoming_total', 'client_reported', 'outcome')
+             and re.search(r'followup_outcome_(?:text|html)\(', php('followups.php'))
+             and 'function followup_outcome_text(' in php('inc/device_followups.php'),
+             'R20: the follow-up tiles and Recently recorded rows use the website\'s words and the server\'s totals and outcomes')
+
+# R22-R23: compliance.
+compliance_case = api_case('compliance')
+compliance_php_inc = php('inc/compliance_data.php')
+static_check(all(t in compliance_swift for t in ('"Releases of information (', '"Privacy notice not recorded (', '"Overdue equipment loans (',
+                                                 '"Device follow-ups due (', '"Contracts at risk (', '"Equipment service due (', '"Consents to renew',
+                                                 '"Minors and Pre-ETS students with no guardian consent requested (', '"Expiring, expired or withdrawn (',
+                                                 '"No release or consent on file (', '"Progress reports due (',
+                                                 '"Nothing needs attention right now."', '"All caught up."', '"No service due."', '"No follow-ups are due."',
+                                                 '"No loans are overdue."', '"No consents need attention."', '"No releases need attention."',
+                                                 'expired > 0 ? ", \\(expired) expired" : ""'))
+             and all(compliance_swift.index(a) < compliance_swift.index(b) for a, b in (
+                 ('"Authorizations at risk', '"Progress reports due'), ('"Progress reports due', '"Equipment service due'),
+                 ('"Equipment service due', '"Device follow-ups due'), ('"Device follow-ups due', '"Overdue equipment loans'),
+                 ('"Overdue equipment loans', '"Contracts at risk'), ('consentsSection\n', '"Releases of information'),
+                 ('"Releases of information', '"Privacy notice not recorded')))
+             and 'compliance_data(' in php('compliance.php') and ('compliance_data(' in compliance_case or 'compliance_api_reply(' in compliance_case)
+             and 'track_rollup(' not in compliance_case
+             and all("'%s' =>" % k in compliance_php_inc or "$out['%s'] =" % k in compliance_php_inc for k in ('followups_due', 'followups_due_total', 'loans_overdue', 'contracts_risk', 'consents', 'releases_risk',
+                       'no_release', 'minors_no_consent', 'no_notice', 'counts', 'validity_days', 'client_id', 'funds_used', 'authorized_funds', 'text')),
+             'R22: Compliance shows every website section in its order, from the keys the server sends; the API holds no copy')
+static_check('    struct ComplianceRows<Row: Decodable>: Decodable {' in between(compliance_swift, 'struct ComplianceResponse: Decodable {', '\n}\n')
+             and 'if let row = try? list.decode(Row.self) { out.append(row) } else { _ = try? list.decode(Skip.self) }' in compliance_swift
+             and all('ComplianceRows<%s>' % t in compliance_swift for t in ('ComplianceAuth', 'ComplianceReport', 'ComplianceFollowupDue', 'ComplianceLoanOverdue',
+                                                                             'ComplianceContractRisk', 'ConsentDueItem', 'ComplianceReleaseRisk', 'ComplianceClientRow'))
+             and '"Showing the first \\(fu.count) of \\(total) checks due, oldest first."' in compliance_swift
+             and "Send the renewal from the client's page." in compliance_swift
+             and 'checks due, oldest first.' in php('compliance.php') and "Send the renewal from the client's page." in php('compliance.php'),
+             'R22: each compliance section decodes row by row (one odd row never blanks the screen); the cut-off and consents lines are compliance.php\'s')
+static_check('struct TrackByIdView: View {' in search_swift and 'private struct TrackByIdView' not in search_swift
+             and 'TrackByIdView(trackId: trackId, clientId: clientId)' in compliance_swift
+             and 'EquipmentDetailView(itemId: l.id, itemName: l.name)' in compliance_swift and 'ContractDetail(id: c.id' in compliance_swift
+             and 'ClientDetailView(clientId: clientId)' in compliance_swift
+             and '"Funds: \\(money(used)) of \\(money(authorized)) (\\(pct)%\\(pct >= 100 ? ", used up" : "")), \\(money(remaining)) remaining"' in compliance_swift,
+             'R23: compliance rows open their track, item, contract or client; the funds line is the website\'s')
+
+# R24-R26: agreements, training, credentials.
+static_check('c["corrections_text"] as? String' in agreements_swift
+             and re.search(r'if let sid = a\["signature_id"\] as\? Int \{\s*NavigationLink\("Read your signed copy"\)', agreements_swift)
+             and "'corrections_text' =>" in php('inc/api_more.php') and 'staff_agreement_corrections_text(' in php('agreements.php'),
+             'R24: the signed copy is offered whenever there is a signature, with the corrections note')
+static_check('($0["state"] as? String) != "done"' in training_swift,
+             'R25: "N of M to take" counts every module not done, as the website')
+cred_save = between(training_swift, 'private func save() async {\n        let name = type', '\n    }\n')
+static_check(all(k in cred_save for k in ('"type": type', '"other_name": type == "Other" ? name : ""', '"issued_on": issuedOn', '"expires_on": expiresOn',
+                                          '"notes": notes.trimmingCharacters(in: .whitespacesAndNewlines)', 'if id == 0 { body["idem_key"] = idem.key(for: body) }',
+                                          'try await api.call("save_credential", method: "POST", body: body, refusal:'))
+             and 'label: "Notes, optional"' in training_swift
+             and all(t in training_swift for t in ('"Date issued: enter the date issued as a real date, not in the future."',
+                                                   '"Expires on: enter the expiry date as a real date, or leave it empty if it does not expire."',
+                                                   '"Expires on: the expiry date is before the date issued."'))
+             and '["type": "Credential", "other_name": "Its name", "issued_on": "Date issued",' in training_swift
+             and all("'%s'" % k in php('inc/staff_credentials.php') for k in ('type', 'other_name', 'issued_on', 'expires_on', 'number', 'issuer', 'notes'))
+             and 'staff_credential_input(' in php('credentials.php') and 'staff_credential_input(' in php('inc/api_more.php'),
+             'R26: a credential sends type, other_name and notes with a retry key, checks dates as the website, and ties refusals to fields')
 
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]

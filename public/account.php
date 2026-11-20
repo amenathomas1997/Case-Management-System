@@ -7,20 +7,17 @@ csrf_check();
 $user = require_login();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_alert_email'])) {
-    $how = in_array($_POST['alert_email'] ?? '', ['now', 'daily', 'off'], true) ? $_POST['alert_email'] : 'off';
-    db()->prepare('UPDATE users SET alert_email = ? WHERE id = ?')->execute([$how, (int)$user['id']]);
-    flash(['now' => 'Urgent alerts will be emailed to you as they happen (at most one email every 15 minutes), with one email a day when you have unread alerts.', 'daily' => 'You will get one email a day when you have unread alerts.', 'off' => 'Alerts will no longer be emailed; they stay in Alerts in the app and on the website.'][$how]);
+    // Shared with the app (inc/account_actions.php, 4.36.0); the select posts only the three choices.
+    $r = account_alert_email_save((int)$user['id'], $_POST['alert_email'] ?? '');
+    $r['ok'] ? flash($r['message']) : flash((string)reset($r['errors']), 'error');
     redirect('account.php#alerts-h');
 }
 // Your mobile number, and whether urgent alerts are texted to it (4.17.0).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mobile'])) {
-    $raw = is_string($_POST['mobile'] ?? null) ? trim($_POST['mobile']) : '';
-    $mobile = $raw === '' ? null : sms_number($raw);
-    if ($raw !== '' && $mobile === null) { keep_input(); keep_field_errors(['mobile' => 'Enter a mobile number such as 515-555-0100, or leave it empty.']); redirect('account.php#mobile-h'); }
-    $alerts = !empty($_POST['alert_sms']) && $mobile !== null ? 1 : 0;
-    db()->prepare('UPDATE users SET mobile = ?, alert_sms = ? WHERE id = ?')->execute([$mobile, $alerts, (int)$user['id']]);
-    audit((int)$user['id'], 'user.mobile', 'user', (int)$user['id'], $alerts ? 'urgent alerts by text on' : 'urgent alerts by text off');
-    flash($mobile === null ? 'Mobile number removed.' : 'Mobile number saved.' . ($alerts ? ' Urgent alerts are texted to it (at most one every 15 minutes, never with client details).' : ''));
+    // Shared with the app (inc/account_actions.php, 4.36.0): the same check, rule and audit.
+    $r = account_mobile_save((int)$user['id'], is_string($_POST['mobile'] ?? null) ? $_POST['mobile'] : '', !empty($_POST['alert_sms']));
+    if (!$r['ok']) { keep_input(); keep_field_errors($r['errors']); redirect('account.php#mobile-h'); }
+    flash($r['message']);
     redirect('account.php#mobile-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls'])) {
@@ -163,8 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['meeting_disconnec
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['device_signout']) || isset($_POST['device_lost']))) {
     $lost = isset($_POST['device_lost']);
     $ok = app_device_action((int)($_POST['device_id'] ?? 0), (int)$user['id'], $lost, (int)$user['id']);
-    flash($ok ? ($lost ? 'Reported lost. The next time that phone connects, the app removes everything it keeps and signs out. Change your password too if someone may know it.' : 'That phone is signed out of the app.')
-        : 'That phone was already signed out or reported lost.', $ok ? 'success' : 'error');
+    flash(app_device_action_message($ok, $lost), $ok ? 'success' : 'error');
     redirect('account.php#phones-h');
 }
 
@@ -417,9 +413,9 @@ page_header('My Account', $user, 'account');
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
       <label for="alert_email">Email me about alerts</label>
       <select id="alert_email" name="alert_email">
-        <option value="now"<?= $alertHow === 'now' ? ' selected' : '' ?>>Urgent ones at once, and daily</option>
-        <option value="daily"<?= $alertHow === 'daily' ? ' selected' : '' ?>>Once a day</option>
-        <option value="off"<?= $alertHow === 'off' ? ' selected' : '' ?>>Never</option>
+        <?php foreach (ACCOUNT_ALERT_EMAIL_CHOICES as $v => $label): ?>
+        <option value="<?= h($v) ?>"<?= $alertHow === $v ? ' selected' : '' ?>><?= h($label) ?></option>
+        <?php endforeach; ?>
       </select>
       <button type="submit" name="save_alert_email" value="1" class="btn btn-secondary btn-sm">Save</button>
     </form>
@@ -465,29 +461,29 @@ page_header('My Account', $user, 'account');
       </form>
     <?php endif; ?>
 
-    <?php $meetApps = array_filter(array_keys(MEETING_PROVIDERS), fn($p) => meeting_app($p) !== null); ?>
+    <?php $connections = account_connections((int)$user['id']); $meetApps = $connections['meetings']; ?>
     <?php if ($meetApps): ?>
     <h2 id="meetings-h">Online meetings</h2>
     <p>Connect your own Zoom or Microsoft Teams account, and remote sessions you book for yourself, or an administrator books for you, can get their meeting link made there. Disconnecting Zoom also withdraws it at Zoom; for Microsoft, also remove the app from your Microsoft account's app permissions.</p>
     <ul>
-    <?php foreach ($meetApps as $prov): $acc = meeting_account((int)$user['id'], $prov); ?>
+    <?php foreach ($meetApps as $meet): $prov = $meet['provider']; ?>
       <li>
-      <?php if ($acc && meeting_refused_at($acc) !== null): ?>
+      <?php if ($meet['state'] === 'ended'): ?>
         <form method="post" action="meeting_connect.php?provider=<?= h($prov) ?>" class="inline-form"><?= csrf_field() ?>
-          <?= h(MEETING_PROVIDERS[$prov]) ?>: the connection<?= $acc['account_email'] ? ' as ' . h($acc['account_email']) : '' ?> ended on <?= h(fmt_date(substr((string)$acc['refused_at'], 0, 10))) ?>, so no links are made.
+          <?= h($meet['text']) ?>
           <button type="submit" class="btn btn-primary btn-sm">Connect <?= h(MEETING_PROVIDERS[$prov]) ?> again</button>
         </form>
         <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
           <button type="submit" name="meeting_disconnect" value="<?= h($prov) ?>" class="btn btn-secondary btn-sm">Disconnect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
         </form>
-      <?php elseif ($acc): ?>
+      <?php elseif ($meet['state'] === 'connected'): ?>
         <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
-          <?= h(MEETING_PROVIDERS[$prov]) ?>: connected<?= $acc['account_email'] ? ' as ' . h($acc['account_email']) : '' ?>.
+          <?= h($meet['text']) ?>
           <button type="submit" name="meeting_disconnect" value="<?= h($prov) ?>" class="btn btn-secondary btn-sm">Disconnect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
         </form>
       <?php else: ?>
         <form method="post" action="meeting_connect.php?provider=<?= h($prov) ?>" class="inline-form"><?= csrf_field() ?>
-          <?= h(MEETING_PROVIDERS[$prov]) ?>: not connected.
+          <?= h($meet['text']) ?>
           <button type="submit" class="btn btn-secondary btn-sm">Connect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
         </form>
       <?php endif; ?>
@@ -498,22 +494,21 @@ page_header('My Account', $user, 'account');
 
     <h2 id="avail-h">My availability</h2>
     <p><a href="availability.php">My availability</a>: the hours you take sessions, which clients can book in the portal when self-booking is on.</p>
-    <?php if (calendar_available()): $cs = db()->prepare('SELECT calendar_sync, calendar_synced_at, calendar_error FROM users WHERE id = ?'); $cs->execute([(int)$user['id']]); $csr = $cs->fetch() ?: [];
-        $calKind = calendar_kind((int)$user['id']); $calConn = $calKind !== null ? calendar_connection((int)$user['id'], $calKind) : null;
+    <?php if ($connections['calendar'] !== null): $calStatus = $connections['calendar']; $calKind = $calStatus['kind'];
         $calChoice = is_array($_SESSION['calendar_caldav_choice'] ?? null) ? $_SESSION['calendar_caldav_choice'] : null; ?>
     <h2 id="calendar-h">My calendar</h2>
     <p>Put your sessions in your own calendar, kept up to date when they are booked, moved or cancelled. Your other appointments there then count as busy, so no session is offered, booked or moved over them. If you move or delete a session's event in your calendar, you are told, so you can change the session here; the calendar alone never changes a session. Three kinds of calendar work: your Microsoft account (work, or a personal Outlook.com account), a CalDAV calendar (iCloud, Nextcloud, a cPanel email account's calendar, Fastmail) or a Google calendar.</p>
     <?php if ($calKind !== null): ?>
     <h3 id="calendar-connected-h">Your calendar</h3>
-    <p><?= h(calendar_kind_name($calKind)) ?><?= $calConn !== null ? ': ' . h((string)$calConn['label']) : ' (its password or key cannot be read on this server: connect it again)' ?>.</p>
+    <p><?= h($calStatus['kind_text']) ?></p>
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
       <button type="submit" name="calendar_action" value="test" class="btn btn-secondary btn-sm">Test the connection</button>
     </form>
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
       <button type="submit" name="calendar_action" value="disconnect" class="btn btn-secondary btn-sm">Disconnect this calendar</button>
     </form>
-    <?php if (!empty($csr['calendar_sync'])): ?>
-    <p>Sync is on<?= !empty($csr['calendar_synced_at']) ? ', last brought up to date ' . h(fmt_datetime((string)$csr['calendar_synced_at'])) : '' ?>.<?= !empty($csr['calendar_error']) ? ' <strong>Problem: ' . h((string)$csr['calendar_error']) . '</strong>' : '' ?></p>
+    <?php if ($calStatus['sync_on']): ?>
+    <p><?= h($calStatus['sync_text']) ?><?= $calStatus['error'] !== null ? ' <strong>Problem: ' . h($calStatus['error']) . '</strong>' : '' ?></p>
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
       <button type="submit" name="calendar_sync" value="off" class="btn btn-secondary btn-sm">Turn off and remove the session events</button>
     </form>

@@ -180,3 +180,89 @@ function account_remove_passkey(array $user, int $pkId): array {
 function account_end_other_sessions(int $userId): bool {
     return user_session_epoch_bump($userId);
 }
+
+/* ---------- How alerts reach you, your mobile number, your connections (4.36.0) ----------
+ * Shared by account.php and the app's account / save_alert_settings actions. As on the
+ * website, no password is asked and nobody is notified; the mobile number is audited. */
+
+/** The choices of "Email me about alerts", in the website's order. */
+const ACCOUNT_ALERT_EMAIL_CHOICES = ['now' => 'Urgent ones at once, and daily', 'daily' => 'Once a day', 'off' => 'Never'];
+
+/** The alert-email choice checked, without saving: null when it is one of the three, else the field error. */
+function account_alert_email_error(mixed $how): ?string {
+    return is_string($how) && isset(ACCOUNT_ALERT_EMAIL_CHOICES[$how]) ? null
+        : 'Email me about alerts: choose Urgent ones at once, and daily; Once a day; or Never.';
+}
+
+/** Save how alerts are emailed: now, daily or off. */
+function account_alert_email_save(int $userId, mixed $how): array {
+    $err = account_alert_email_error($how);
+    if ($err !== null) return ['ok' => false, 'errors' => ['alert_email' => $err]];
+    db()->prepare('UPDATE users SET alert_email = ? WHERE id = ?')->execute([$how, $userId]);
+    return ['ok' => true, 'alert_email' => $how, 'message' => ['now' => 'Urgent alerts will be emailed to you as they happen (at most one email every 15 minutes), with one email a day when you have unread alerts.',
+        'daily' => 'You will get one email a day when you have unread alerts.',
+        'off' => 'Alerts will no longer be emailed; they stay in Alerts in the app and on the website.'][$how]];
+}
+
+/** The mobile number checked, without saving: [number or null, error or null]. Blank removes it. */
+function account_mobile_check(mixed $raw): array {
+    $raw = is_string($raw) ? trim($raw) : (is_int($raw) ? (string)$raw : '');
+    $mobile = $raw === '' ? null : sms_number($raw);
+    return [$mobile, $raw !== '' && $mobile === null ? 'Enter a mobile number such as 515-555-0100, or leave it empty.' : null];
+}
+
+/** Save the mobile number (blank removes it) and whether urgent alerts are texted to it (only with a number). */
+function account_mobile_save(int $userId, mixed $raw, bool $sms): array {
+    [$mobile, $err] = account_mobile_check($raw);
+    if ($err !== null) return ['ok' => false, 'errors' => ['mobile' => $err]];
+    $alerts = $sms && $mobile !== null ? 1 : 0;
+    db()->prepare('UPDATE users SET mobile = ?, alert_sms = ? WHERE id = ?')->execute([$mobile, $alerts, $userId]);
+    audit($userId, 'user.mobile', 'user', $userId, $alerts ? 'urgent alerts by text on' : 'urgent alerts by text off');
+    return ['ok' => true, 'mobile' => $mobile, 'alert_sms' => (bool)$alerts,
+        'message' => $mobile === null ? 'Mobile number removed.' : 'Mobile number saved.' . ($alerts ? ' Urgent alerts are texted to it (at most one every 15 minutes, never with client details).' : '')];
+}
+
+/**
+ * The calendar and online-meeting connections in the website's words (My Account): the
+ * calendar (null when calendars are not available on this server) and each meeting provider
+ * with an app set up. Read only; connecting and disconnecting stay on the website.
+ */
+function account_connections(int $userId): array {
+    $calendar = null;
+    if (calendar_available()) {
+        $cs = db()->prepare('SELECT calendar_sync, calendar_synced_at, calendar_error FROM users WHERE id = ?');
+        $cs->execute([$userId]);
+        $csr = $cs->fetch() ?: [];
+        $kind = calendar_kind($userId);
+        $conn = $kind !== null ? calendar_connection($userId, $kind) : null;
+        $syncOn = $kind !== null && !empty($csr['calendar_sync']);
+        $syncedAt = !empty($csr['calendar_synced_at']) ? (string)$csr['calendar_synced_at'] : null;
+        $error = !empty($csr['calendar_error']) ? (string)$csr['calendar_error'] : null;
+        $kindText = $kind !== null ? calendar_kind_name($kind) . ($conn !== null ? ': ' . (string)$conn['label'] : ' (its password or key cannot be read on this server: connect it again)') . '.' : '';
+        $syncText = $syncOn ? 'Sync is on' . ($syncedAt !== null ? ', last brought up to date ' . fmt_datetime($syncedAt) : '') . '.' : '';
+        $calendar = ['kind' => $kind, 'kind_name' => $kind !== null ? calendar_kind_name($kind) : '', 'label' => $conn !== null ? (string)$conn['label'] : null,
+            'sync_on' => $syncOn, 'synced_at' => $syncedAt, 'error' => $error,
+            'kind_text' => $kindText, 'sync_text' => $syncText,
+            'text' => $kind === null ? 'No calendar is connected yet.'
+                : $kindText . ($syncOn ? ' ' . $syncText . ($error !== null ? ' Problem: ' . $error : '') : '')];
+    }
+    $meetings = [];
+    foreach (array_keys(MEETING_PROVIDERS) as $prov) {
+        if (meeting_app($prov) === null) continue;
+        $acc = meeting_account($userId, $prov);
+        $name = MEETING_PROVIDERS[$prov];
+        $email = $acc && $acc['account_email'] ? (string)$acc['account_email'] : null;
+        if ($acc && meeting_refused_at($acc) !== null) {
+            $state = 'ended';
+            $text = $name . ': the connection' . ($email !== null ? ' as ' . $email : '') . ' ended on ' . fmt_date(substr((string)$acc['refused_at'], 0, 10)) . ', so no links are made.';
+        } elseif ($acc) {
+            $state = 'connected';
+            $text = $name . ': connected' . ($email !== null ? ' as ' . $email : '') . '.';
+        } else {
+            $state = 'not_connected';
+            $text = $name . ': not connected.';
+        }
+        $meetings[] = ['provider' => $prov, 'name' => $name, 'state' => $state, 'account_email' => $email, 'text' => $text];
+    }
+    return ['calendar' => $calendar, 'meetings' => $meetings];
+}

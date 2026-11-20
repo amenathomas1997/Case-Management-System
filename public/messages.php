@@ -160,7 +160,8 @@ if ($openCid) {
         // whose counselor email is still unconfirmed, so the counselor would not see it. ?>
         <?php $unconfirmed = $openChannel === 'counselor' && trim((string)$c['counselor_email']) !== '' && (int)$c['counselor_verified'] === 0; ?>
         <?php if ($unconfirmed): ?>
-        <p class="alert alert-info"><strong>Not yet visible to the counselor:</strong> <?= h($c['name']) ?>'s counselor email has not been confirmed, so the counselor portal does not show this client. Replies are saved here and appear there once the counselor is confirmed on <a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
+        <?php $unconfirmedText = message_counselor_unconfirmed_text((string)$c['name'], true); $unconfirmedLead = 'Not yet visible to the counselor:'; $unconfirmedTail = 'the client\'s edit page.'; ?>
+        <p class="alert alert-info"><strong><?= h($unconfirmedLead) ?></strong> <?= h(substr($unconfirmedText, strlen($unconfirmedLead) + 1, -strlen($unconfirmedTail))) ?><a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
         <?php endif; ?>
         <label for="body">Reply to the <?= $chanWho ?> <span class="hint">Up to 5,000 characters, or leave it empty to send just a file. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</span></label>
         <textarea id="body" name="body" rows="3" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
@@ -195,37 +196,15 @@ if ($openCid) {
 }
 
 /* ---- Conversation list ---- */
-$sql = "SELECT m.client_id, m.channel, c.name AS client_name,
-        MAX(m.created_at) AS last_at,
-        SUM(m.sender <> 'staff' AND m.read_at IS NULL) AS unread,
-        SUBSTRING_INDEX(MAX(CONCAT(m.created_at, 0x1f, m.sender, 0x1f, COALESCE(m.staff_id, 0), 0x1f, m.body)), 0x1f, -1) AS last_body,
-        SUBSTRING_INDEX(SUBSTRING_INDEX(MAX(CONCAT(m.created_at, 0x1f, m.sender, 0x1f, COALESCE(m.staff_id, 0), 0x1f, m.body)), 0x1f, 2), 0x1f, -1) AS last_sender,
-        SUBSTRING_INDEX(SUBSTRING_INDEX(MAX(CONCAT(m.created_at, 0x1f, m.sender, 0x1f, COALESCE(m.staff_id, 0), 0x1f, m.body)), 0x1f, 3), 0x1f, -1) AS last_staff_id
-    FROM messages m JOIN clients c ON c.id = m.client_id
-    WHERE 1=1$scopeAnd
-    GROUP BY m.client_id, m.channel, c.name
-    ORDER BY unread DESC, last_at DESC LIMIT 200";
-$st = db()->prepare($sql);
-$st->execute($scopeArgs);
-$threads = $st->fetchAll();
-// The counts cover every conversation in scope, not only the 200 listed.
-$cnt = db()->prepare("SELECT COUNT(DISTINCT m.client_id, m.channel) AS threads, COALESCE(SUM(m.sender <> 'staff' AND m.read_at IS NULL), 0) AS unread
-    FROM messages m JOIN clients c ON c.id = m.client_id WHERE 1=1$scopeAnd");
-$cnt->execute($scopeArgs);
-$counts = $cnt->fetch();
-$threadTotal = (int)$counts['threads'];
+// inc/messages_list.php, shared with the apps (4.36.0): one row per client and channel.
+$conversations = message_conversations($scoped ? (int)$user['id'] : null, (int)$user['id'], true);
+$threads = $conversations['rows'];
+$threadTotal = $conversations['total'];
 // Any client's conversation can be opened from here, including one past the list's limit.
 $pick = db()->prepare('SELECT c.id, c.name FROM clients c WHERE c.archived_at IS NULL' . $scopeAnd . ' ORDER BY c.name');
 $pick->execute($scopeArgs);
 $pickClients = $pick->fetchAll();
-// "You" only for the viewer's own messages; a colleague's reply shows their name.
-$staffNames = db()->query('SELECT id, name FROM users')->fetchAll(PDO::FETCH_KEY_PAIR);
-$lastSenderLabel = function (array $t) use ($staffNames, $user): string {
-    if ($t['last_sender'] !== 'staff') return '';
-    $sid = (int)$t['last_staff_id'];
-    return ($sid === (int)$user['id'] ? 'You' : ($staffNames[$sid] ?? 'Staff')) . ': ';
-};
-$totalUnread = (int)$counts['unread'];
+$totalUnread = $conversations['unread'];
 
 page_header('Messages', $user, 'messages');
 ?>
@@ -259,7 +238,7 @@ page_header('Messages', $user, 'messages');
       <td><a href="messages.php?client=<?= (int)$t['client_id'] ?>&amp;channel=<?= h($t['channel']) ?>"><?= h($t['client_name']) ?><span class="visually-hidden"> — <?= $t['channel'] === 'client' ? 'client' : 'counselor' ?> conversation<?= (int)$t['unread'] > 0 ? ', ' . (int)$t['unread'] . ' unread' : '' ?></span></a>
         <?= (int)$t['unread'] > 0 ? ' <span class="badge badge-pending" aria-hidden="true">' . (int)$t['unread'] . ' new</span>' : '' ?></td>
       <td><?= $t['channel'] === 'client' ? 'Client' : 'Counselor' ?></td>
-      <td><?= h($lastSenderLabel($t) . mb_strimwidth((string)$t['last_body'], 0, 60, '…')) ?></td>
+      <td><?= h($t['last_sender_label'] . $t['last_body']) ?></td>
       <td><?= fmt_datetime($t['last_at']) ?></td>
     </tr>
   <?php endforeach; ?>

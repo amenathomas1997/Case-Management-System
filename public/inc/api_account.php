@@ -47,6 +47,23 @@ function api_account_refused(array $r): never {
     out(['ok' => false, 'error' => implode(' ', $errors) ?: 'Nothing was changed.', 'errors' => $errors], 422);
 }
 
+/** The mobile number and alert settings as the apps read them (4.36.0). */
+function api_account_alert_fields(int $userId): array {
+    $q = db()->prepare('SELECT mobile, alert_sms, alert_email FROM users WHERE id = ?');
+    $q->execute([$userId]);
+    $r = $q->fetch() ?: [];
+    $how = (string)($r['alert_email'] ?? '');
+    return ['mobile' => ($r['mobile'] ?? null) !== null && $r['mobile'] !== '' ? (string)$r['mobile'] : null, 'alert_sms' => !empty($r['alert_sms']),
+        'sms_enabled' => sms_enabled(), 'alert_email' => isset(ACCOUNT_ALERT_EMAIL_CHOICES[$how]) ? $how : 'off'];
+}
+
+/** The calendar and online-meeting status, in the contract's shape (account.php's sentences). */
+function api_account_connections_out(int $userId): array {
+    $c = account_connections($userId);
+    if ($c['calendar'] !== null) unset($c['calendar']['kind_text'], $c['calendar']['sync_text']);
+    return $c;
+}
+
 /** The setup key waiting for confirmation, or '' when there is none or it has run out. */
 function api_totp_pending(int $userId): string {
     $pending = json_decode((string)setting('totp_pending_' . $userId), true);
@@ -57,7 +74,12 @@ function api_totp_pending_clear(int $userId): void {
     db()->prepare('DELETE FROM settings WHERE name = ?')->execute(['totp_pending_' . $userId]);
 }
 
-if ($action !== 'account' && $_SERVER['REQUEST_METHOD'] !== 'POST') fail('Use POST for changes.', 405);
+// api_account_devices() is in inc/api_436.php (a repeated device_action rebuilds the list before this file loads).
+/** device_action with lost: a wrong password (an empty one says "Enter your password to confirm this change. Nothing was changed."). */
+const API_DEVICE_LOST_WRONG_PASSWORD = 'Password incorrect — the phone was not reported lost.';
+const API_ACCOUNT_DEVICES_INTRO = 'If a phone is lost or stolen, choose Report lost and wipe: the next time it connects, the app removes its drafts, unsent offline entries and saved lists, and signs out.';
+
+if (!in_array($action, ['account', 'app_devices'], true) && $_SERVER['REQUEST_METHOD'] !== 'POST') fail('Use POST for changes.', 405);
 
 $acctQ = db()->prepare('SELECT u.id, u.name, u.email, u.role, u.totp_enabled, u.cal_token, g.name AS group_name
     FROM users u LEFT JOIN `groups` g ON g.id = u.group_id WHERE u.id = ?');
@@ -86,7 +108,51 @@ switch ($action) {
              'can_schedule' => can('schedule'),
              'passkeys' => array_map(fn(array $p): array => ['id' => (int)$p['id'], 'name' => (string)($p['name'] ?? ''),
                  'created' => (string)$p['created_at'], 'last_used' => $p['last_used_at'] !== null ? (string)$p['last_used_at'] : null], $pk->fetchAll()),
-             'app_sessions' => (int)$sessions->fetchColumn()]);
+             'app_sessions' => (int)$sessions->fetchColumn()]
+             // 4.36.0: the mobile number, how alerts reach the person, and their connections (read only).
+             + api_account_alert_fields($userId)
+             + ['alert_email_choices' => array_map(fn($v, $l) => ['value' => $v, 'label' => $l], array_keys(ACCOUNT_ALERT_EMAIL_CHOICES), ACCOUNT_ALERT_EMAIL_CHOICES)]
+             + api_account_connections_out($userId));
+
+    case 'app_devices':
+        out(['ok' => true, 'intro' => API_ACCOUNT_DEVICES_INTRO, 'devices' => api_account_devices($userId, (int)$tok['id'])]);
+
+    case 'device_action': {
+        // The person's own phones only (app_device_action checks the owner), audited with
+        // " (mobile)", nobody notified. The phone in use is signed out with Sign out. Signing
+        // another phone out needs no password, as account.php; reporting one lost and wiping it
+        // re-checks the account password from the app (4.36.0 review), as logout_all does.
+        $devId = $input['device_id'] ?? null;
+        $devId = is_int($devId) ? $devId : (is_string($devId) && ctype_digit(trim($devId)) ? (int)trim($devId) : 0);
+        if ($devId < 1) out(['ok' => false, 'error' => 'Choose a phone.', 'errors' => ['device_id' => 'Choose a phone.']], 422);
+        if ($devId === (int)$tok['id']) fail('This is the phone you are using. Use Sign out to sign out of it.', 409);
+        $lost = api_bool($input['lost'] ?? false);
+        if ($lost) {
+            $pwErr = api_account_reauth($userId, $input['password'] ?? '', API_DEVICE_LOST_WRONG_PASSWORD);
+            if ($pwErr !== null) api_account_refused(['errors' => ['password' => $pwErr]]);
+        }
+        $done = app_device_action($devId, $userId, $lost, $userId, ' (mobile)');
+        if (!$done) fail(app_device_action_message(false, $lost), 409);
+        out(['ok' => true, 'lost' => $lost, 'message' => app_device_action_message(true, $lost), 'devices' => api_account_devices($userId, (int)$tok['id'])]);
+    }
+
+    case 'save_alert_settings': {
+        // As account.php: no password, no notification; the mobile number is audited. Both parts
+        // are checked before either is saved. A mobile of null (or none sent) leaves it as it is;
+        // only "" removes it.
+        $hasEmail = array_key_exists('alert_email', $input) && $input['alert_email'] !== null;
+        $hasMobile = array_key_exists('mobile', $input) && $input['mobile'] !== null;
+        if (!$hasEmail && !$hasMobile) out(['ok' => false, 'error' => 'Nothing was changed.'], 422);
+        $errors = [];
+        if ($hasMobile && ($e = account_mobile_check($input['mobile'])[1]) !== null) $errors['mobile'] = $e;
+        if ($hasEmail && ($e = account_alert_email_error($input['alert_email'])) !== null) $errors['alert_email'] = $e;
+        if ($errors) out(['ok' => false, 'error' => (string)reset($errors), 'errors' => $errors], 422);
+        $messages = [];
+        if ($hasMobile) $messages[] = account_mobile_save($userId, $input['mobile'], api_bool($input['alert_sms'] ?? false))['message'];
+        if ($hasEmail) $messages[] = account_alert_email_save($userId, $input['alert_email'])['message'];
+        $now = api_account_alert_fields($userId);
+        out(['ok' => true, 'message' => implode(' ', $messages), 'mobile' => $now['mobile'], 'alert_sms' => $now['alert_sms'], 'alert_email' => $now['alert_email']]);
+    }
 
     case 'change_password':
         $r = account_change_password($acctUser, $input['current_password'] ?? '', $input['new_password'] ?? null, $input['confirm_password'] ?? null,

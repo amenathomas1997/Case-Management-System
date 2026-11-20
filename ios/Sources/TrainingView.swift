@@ -12,7 +12,8 @@ struct TrainingView: View {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
             if !loaded && error == nil { ProgressView("Loading your training…") }
             if loaded {
-                let needed = items.filter { ($0["state"] as? String) == "needed" }.count
+                // 4.36.0: every module not done counts, renewals due too, as the website's "N of M to take".
+                let needed = items.filter { ($0["state"] as? String) != "done" }.count
                 Text(items.isEmpty ? "There is no training for you to take." : needed > 0 ? "\(needed) of \(items.count) to take." : "Every training is passed and current.")
             }
             ForEach(Array(items.enumerated()), id: \.offset) { _, m in
@@ -184,6 +185,9 @@ struct CredentialEditView: View {
     @State private var issuer = ""
     @State private var issued = ""
     @State private var expires = ""
+    @State private var notes = ""
+    /// A new credential's retry key (4.36.0): a retry after a lost reply does not add it twice.
+    @State private var idem = IdemKey()
     @State private var busy = false
     @State private var error: String?
     @State private var confirmRemove = false
@@ -200,10 +204,12 @@ struct CredentialEditView: View {
             }
             .errorField("Credential")
             if type == "Other" { CaptionedField(label: "Its name (required)", text: $other, errorName: "Its name") }
-            CaptionedField(label: "Number, optional", text: $number)
-            CaptionedField(label: "Issued by, optional", text: $issuer)
-            CaptionedField(label: "Date issued, year-month-day, optional", text: $issued)
-            CaptionedField(label: "Expires on, year-month-day; empty if it does not expire", text: $expires)
+            CaptionedField(label: "Number, optional", text: $number, errorName: "Number")
+            CaptionedField(label: "Issued by, optional", text: $issuer, errorName: "Issued by")
+            CaptionedField(label: "Date issued, year-month-day, optional", text: $issued, keyboard: .numbersAndPunctuation, errorName: "Date issued")
+            CaptionedField(label: "Expires on, year-month-day; empty if it does not expire", text: $expires, keyboard: .numbersAndPunctuation,
+                           errorName: "Expires on")
+            CaptionedField(label: "Notes, optional", text: $notes, lines: 1...4, errorName: "Notes")
             // Not dimmed while the credential is unchosen: Save then says what is missing, on the field.
             Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy)
             if id > 0 { Button("Remove this credential", role: .destructive) { confirmRemove = true } }
@@ -219,23 +225,89 @@ struct CredentialEditView: View {
             other = types.contains(name) ? "" : name
             number = credential["number"] as? String ?? ""; issuer = credential["issuer"] as? String ?? ""
             issued = credential["issued_on"] as? String ?? ""; expires = credential["expires_on"] as? String ?? ""
+            notes = credential["notes"] as? String ?? ""
         }
     }
 
     private func save() async {
         let name = type == "Other" ? other.trimmingCharacters(in: .whitespaces) : type
-        guard !type.isEmpty else { showFormError("Credential: choose the credential.", in: &error); return }
-        guard !name.isEmpty else { showFormError("Its name: enter the credential's name.", in: &error); return }
+        let issuedOn = issued.trimmingCharacters(in: .whitespaces)
+        let expiresOn = expires.trimmingCharacters(in: .whitespaces)
+        // The website's checks and sentences (credentials.php), said here first, on the field.
+        if let problem = credentialProblem(type: type, name: name, number: number, issuer: issuer, issued: issuedOn,
+                                           expires: expiresOn, notes: notes) {
+            showFormError(problem.message, in: &error, field: problem.field)
+            return
+        }
         busy = true; error = nil
+        var body: [String: Any] = ["id": id, "type": type, "other_name": type == "Other" ? name : "",
+                                   // name too, for a server before 4.36.0, which reads only it
+                                   "name": name, "number": number.trimmingCharacters(in: .whitespaces),
+                                   "issuer": issuer.trimmingCharacters(in: .whitespaces), "issued_on": issuedOn, "expires_on": expiresOn,
+                                   "notes": notes.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if id == 0 { body["idem_key"] = idem.key(for: body) }
+        var refusedFields: [String: String] = [:]
         do {
-            _ = try await api.callDict("save_credential", body: ["id": id, "name": name, "number": number, "issuer": issuer, "issued_on": issued, "expires_on": expires])
+            let _: OKResponse = try await api.call("save_credential", method: "POST", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
             // Said once the sheet has gone: closing it moves VoiceOver, which cut it off.
             await onDone(); announceAfterDismiss("Saved \(name)."); dismiss()
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch APIError.server(let message) {
+            idem.answered()
+            busy = false
+            let order = ["type", "other_name", "number", "issuer", "issued_on", "expires_on", "notes"]
+            showFormError(message, in: &self.error, field: order.first { refusedFields[$0] != nil }.flatMap { credentialFieldNames[$0] })
+        } catch {
+            idem.failed(error)
+            busy = false
+            showFormError(IdemKey.message(for: error), in: &self.error)
+        }
     }
 
     private func remove() async {
         do { _ = try await api.callDict("delete_credential", body: ["id": id]); await onDone(); announceAfterDismiss("Removed."); dismiss() }
         catch { showFormError(error.localizedDescription, in: &self.error) }
     }
+}
+
+/// save_credential's errors keys and the fields they are about (4.36.0).
+let credentialFieldNames = ["type": "Credential", "other_name": "Its name", "issued_on": "Date issued",
+                            "expires_on": "Expires on", "number": "Number", "issuer": "Issued by", "notes": "Notes"]
+
+/// A real year-month-day date ("2026-02-30" is not), or nil.
+func credentialDay(_ text: String) -> Date? {
+    guard text.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return nil }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.calendar = Calendar(identifier: .gregorian)
+    f.dateFormat = "yyyy-MM-dd"
+    guard let date = f.date(from: text), f.string(from: date) == text else { return nil }
+    return date
+}
+
+/// The first problem with a credential, in the website's words, and the field it is about.
+func credentialProblem(type: String, name: String, number: String, issuer: String, issued: String,
+                       expires: String, notes: String) -> (field: String, message: String)? {
+    if type.isEmpty { return ("Credential", "Credential: choose the credential, or choose Other and name it.") }
+    if type == "Other" && name.isEmpty { return ("Its name", "Its name: name the credential, since Other is chosen.") }
+    if name.count > 120 { return ("Its name", "Its name: keep the name to 120 characters or fewer.") }
+    if number.trimmingCharacters(in: .whitespaces).count > 80 { return ("Number", "Number: keep this to 80 characters or fewer.") }
+    if issuer.trimmingCharacters(in: .whitespaces).count > 120 { return ("Issued by", "Issued by: keep this to 120 characters or fewer.") }
+    var issuedDate: Date?
+    if !issued.isEmpty {
+        issuedDate = credentialDay(issued)
+        if issuedDate == nil || issuedDate! > Date() {
+            return ("Date issued", "Date issued: enter the date issued as a real date, not in the future.")
+        }
+    }
+    if !expires.isEmpty {
+        guard let expiry = credentialDay(expires) else {
+            return ("Expires on", "Expires on: enter the expiry date as a real date, or leave it empty if it does not expire.")
+        }
+        if let issuedDate, expiry < issuedDate { return ("Expires on", "Expires on: the expiry date is before the date issued.") }
+    }
+    if notes.trimmingCharacters(in: .whitespacesAndNewlines).count > 255 { return ("Notes", "Notes: keep this to 255 characters or fewer.") }
+    return nil
 }

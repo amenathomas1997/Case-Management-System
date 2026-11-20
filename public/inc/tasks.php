@@ -91,3 +91,29 @@ function set_task_done(int $id, array $user, bool $done): bool {
     if ($changed && function_exists('audit')) audit((int)$user['id'], $done ? 'task.done' : 'task.reopen', 'task', $id, $done ? 'completed' : 'reopened');
     return $changed;
 }
+
+/** Delete a task for good (administrators; the caller checks), audited task.delete with its title.
+ *  False when it no longer exists (4.36.0: tasks.php and the apps). */
+function task_delete(int $id, int $actor): bool {
+    $tq = db()->prepare('SELECT title FROM tasks WHERE id = ?');
+    $tq->execute([$id]);
+    $title = $tq->fetchColumn();
+    $del = db()->prepare('DELETE FROM tasks WHERE id = ?');
+    $del->execute([$id]);
+    if ($title === false || $del->rowCount() !== 1) return false;
+    audit($actor, 'task.delete', 'task', $id, (string)$title);
+    return true;
+}
+
+/** Complete several tasks at once (at most 200, each once, each through set_task_done and its
+ *  visibility check). Returns how many were completed (4.36.0: tasks.php and the apps). */
+function tasks_bulk_done(array $ids, array $user): int {
+    $n = 0;
+    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', $ids)))), 0, 200) as $tid) if (set_task_done($tid, $user, true)) $n++;
+    return $n;
+}
+
+/** "N tasks completed." or the nothing-completed refusal. */
+function tasks_done_message(int $n): string {
+    return $n ? $n . ' task' . ($n === 1 ? '' : 's') . ' completed.' : 'Nothing was completed: choose at least one open task.';
+}

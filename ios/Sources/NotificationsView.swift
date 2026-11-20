@@ -21,11 +21,47 @@ struct AlertItem: Decodable, Identifiable {
 
 struct AlertsResponse: Decodable { let notifications: [AlertItem]; let unread: Int }
 struct AlertCount: Decodable { let unread: Int }
-struct AlertsMarked: Decodable { let marked: Int; let unread: Int; let message: String? }
+struct AlertsMarked: Decodable {
+    let marked: Int
+    let unread: Int
+    let message: String?
+    /// The batch just marked read (4.36.0), to mark it unread again within 15 minutes; nil from
+    /// an older server or when nothing was marked.
+    let undo: AlertsUndo?
+    private enum CodingKeys: String, CodingKey { case marked, unread, message, undo }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        marked = (try? c.decode(Int.self, forKey: .marked)) ?? 0
+        unread = (try? c.decode(Int.self, forKey: .unread)) ?? 0
+        message = (try? c.decodeIfPresent(String.self, forKey: .message)) ?? nil
+        undo = (try? c.decodeIfPresent(AlertsUndo.self, forKey: .undo)) ?? nil
+    }
+}
+
+/// mark_notifications_read's undo: the batch's ids ("1,2,3"), its read stamp, and how many.
+struct AlertsUndo: Decodable {
+    let ids: String
+    let stamp: String
+    let count: Int
+}
+
+struct AlertsUnmarked: Decodable { let restored: Int?; let unread: Int?; let message: String }
+
+/// The undo offered after marking alerts read, kept for the website's 15 minutes.
+struct AlertsUndoOffer {
+    let undo: AlertsUndo
+    let madeAt: Date
+    /// The website's 15 minutes, after which the server refuses the undo.
+    static let lifetime: TimeInterval = 15 * 60
+    var stillOffered: Bool { Date().timeIntervalSince(madeAt) < AlertsUndoOffer.lifetime }
+    var secondsLeft: TimeInterval { max(0, AlertsUndoOffer.lifetime - Date().timeIntervalSince(madeAt)) }
+    var label: String { "Undo: mark the \(undo.count) alert\(undo.count == 1 ? "" : "s") just marked read as unread again" }
+}
 
 /// Where an alert's link leads in the app: a matching screen, or the website page.
 enum AlertDestination: Hashable {
-    case client(Int), referral(Int), tasks, portalRequests, incidents, messages, counselors
+    case client(Int), referral(Int), tasks(String), portalRequests, incidents, messages, counselors
+    case thread(Int, String), followups, schedule, referrals
 
     /// The app screen for a website link, when the account may open it here.
     @MainActor static func from(_ link: String, api: API) -> AlertDestination? {
@@ -34,12 +70,23 @@ enum AlertDestination: Hashable {
         let query = Dictionary((parts.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
         switch page {
         case "client.php": if api.can("clients"), let id = Int(query["id"] ?? "") { return .client(id) }
-        case "referrals.php": if api.can("referrals"), let id = Int(query["view"] ?? "") { return .referral(id) }
-        case "tasks.php": return .tasks
+        case "referrals.php":
+            if api.can("referrals") {
+                if let id = Int(query["view"] ?? ""), id > 0 { return .referral(id) }
+                return .referrals     // 4.36.0: the list, as Android
+            }
+        case "tasks.php": return .tasks(query["due"] ?? "any")
         case "portal_requests.php": if api.can("clients") { return .portalRequests }
         case "incidents.php": if api.can("clients") { return .incidents }
-        case "messages.php": if api.can("clients") { return .messages }
+        case "messages.php":
+            // 4.36.0: a link to one conversation opens it, on its channel (as Android does).
+            if api.can("clients") {
+                if let id = Int(query["client"] ?? ""), id > 0 { return .thread(id, query["channel"] == "counselor" ? "counselor" : "client") }
+                return .messages
+            }
         case "counselors.php": if api.can("admin") { return .counselors }
+        case "followups.php": if api.can("clients") { return .followups }
+        case "schedule.php": if api.can("schedule") { return .schedule }
         default: break
         }
         return nil
@@ -49,11 +96,15 @@ enum AlertDestination: Hashable {
         switch self {
         case .client(let id): ClientDetailView(clientId: id)
         case .referral(let id): ReferralDetailView(referralId: id)
-        case .tasks: TasksView()
+        case .tasks(let due): TasksView(due: due)
         case .portalRequests: PortalRequestsView()
         case .incidents: IncidentsView()
         case .messages: MessagesView()
         case .counselors: CounselorsView()
+        case .thread(let id, let channel): MessageThreadView(clientId: id, clientName: "", startChannel: channel)
+        case .followups: FollowupsView()
+        case .schedule: ScheduleView()
+        case .referrals: ReferralsView()
         }
     }
 }
@@ -75,6 +126,9 @@ struct NotificationsView: View {
     @AccessibilityFocusState private var errorFocused: Bool
     /// Counts failed Mark as read taps: each scrolls to the error banner and focuses it.
     @State private var revealError = 0
+    /// The last batch marked read, which can be marked unread again for 15 minutes (4.36.0).
+    @State private var undoOffer: AlertsUndoOffer?
+    @Environment(\.scenePhase) private var scenePhase
 
     private var shownUnread: [AlertItem] { items.filter(\.unread) }
 
@@ -86,6 +140,13 @@ struct NotificationsView: View {
                     .id("alertsError")
             }
             if loaded {
+                if let undoOffer, undoOffer.stillOffered {
+                    Button { Task { await undoMarkRead(undoOffer) } } label: {
+                        Label(undoOffer.label, systemImage: "arrow.uturn.backward")
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .disabled(busy)
+                }
                 Section {
                     if !shownUnread.isEmpty {
                         Button { Task { await markRead(shownUnread.map(\.id)) } } label: {
@@ -135,6 +196,17 @@ struct NotificationsView: View {
         }
         .refreshable { await load() }
         .task { await load() }
+        // The undo button goes at 15 minutes: a timer while the screen is open, and a check on
+        // coming back to the app (a suspended timer may not have fired).
+        .task(id: undoOffer?.madeAt) {
+            guard let offer = undoOffer else { return }
+            try? await Task.sleep(nanoseconds: UInt64(offer.secondsLeft * 1_000_000_000))
+            guard !Task.isCancelled, undoOffer?.madeAt == offer.madeAt else { return }
+            undoOffer = nil
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active, let offer = undoOffer, !offer.stillOffered { undoOffer = nil }
+        }
     }
 
     @ViewBuilder private func row(_ item: AlertItem) -> some View {
@@ -187,6 +259,8 @@ struct NotificationsView: View {
         defer { busy = false }
         do {
             let r: AlertsMarked = try await api.call("mark_notifications_read", body: ["ids": ids.map(String.init).joined(separator: ",")])
+            // Opening one alert marks it read without offering an undo: only Mark as read does.
+            if !quietly, let undo = r.undo, undo.count > 0 { undoOffer = AlertsUndoOffer(undo: undo, madeAt: Date()) }
             await load()
             if !quietly { announce(r.message ?? "Marked as read.") }
         } catch {
@@ -196,6 +270,25 @@ struct NotificationsView: View {
                 claimFormErrorFocus(error.localizedDescription)
                 revealError += 1
             }
+        }
+    }
+
+    /// Marks the batch just marked read as unread again (mark_notifications_unread); the server
+    /// restores only that batch, only within 15 minutes.
+    private func undoMarkRead(_ offer: AlertsUndoOffer) async {
+        busy = true
+        defer { busy = false }
+        do {
+            let r: AlertsUnmarked = try await api.call("mark_notifications_unread", method: "POST",
+                                                       body: ["ids": offer.undo.ids, "stamp": offer.undo.stamp])
+            undoOffer = nil
+            await load()
+            announce(r.message)
+        } catch {
+            undoOffer = nil
+            showFormError(error.localizedDescription, in: &self.error)
+            claimFormErrorFocus(error.localizedDescription)
+            revealError += 1
         }
     }
 

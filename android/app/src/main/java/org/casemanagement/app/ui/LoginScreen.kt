@@ -53,6 +53,21 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
     var agreedServer by rememberSaveable { mutableStateOf("") }
     var askSwitch by remember { mutableStateOf<Int?>(null) }
     val codeFocus = remember { FocusRequester() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var linkError by remember { mutableStateOf<String?>(null) }
+    // 4.36.0: whether the website signs in with Microsoft (said to such staff: how to get a password).
+    // Asked of the server in use; with an address still to be typed, only once it is the kept one.
+    val askable = !asksForServer || (api.storedServer.isNotBlank() && ServerAddress.same(server, api.storedServer, BuildConfig.DEBUG))
+    var options by remember { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(askable, awaitingCode) {
+        options = if (askable && !awaitingCode) try { api.call("sign_in_options") } catch (e: ApiException) { null } else null
+    }
+    fun openOnSite(path: String) {
+        val apiUrl = if (asksForServer) ServerAddress.apiUrl(server, BuildConfig.DEBUG) else api.base
+        val url = apiUrl?.let { org.casemanagement.app.sitePage(it, path) }
+        linkError = if (url != null && openLink(context, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))) null
+            else "No browser on this phone can open the website."
+    }
 
     fun host() = ServerAddress.host(api.base)
 
@@ -137,6 +152,13 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 ErrorText(error)
                 PrimaryButton("Continue", busy = busy, missing = stillNeeded(missingNames("Your organisation's web address" to (asksForServer && server.isBlank()), "Email" to email.isBlank(), "Password" to password.isEmpty()))) { scope.launch { passwordStep(false) } }
                 if (!asksForServer) Text("Signing in to ${host()}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                // 4.36.0: the website's sign-in help, as the iPhone's.
+                if (signInLinksShown(asksForServer, server, BuildConfig.DEBUG)) {
+                    SecondaryButton("Forgot your password? Reset it on the website") { openOnSite("forgot.php") }
+                    microsoftLine(options)?.let { Text(it) }
+                    SecondaryButton("Privacy policy") { openOnSite("privacy.php") }
+                    ErrorText(linkError)
+                }
                 if (reauth) SecondaryButton("Sign in as someone else instead") {
                     if (api.unsentSignaturesWarning != null && !leaving) leaving = true else api.abandonReauth()
                 }
@@ -155,12 +177,12 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             } else {
                 NoticeText(notice)
                 // The instruction was just read in the notice above, so the field's own hint is short.
-                Field("Sign-in code", code, { code = it.filter { c -> c.isDigit() }.take(8) }, hint = "6 digits", keyboard = KeyboardType.NumberPassword, required = true, autofill = Fill.Code,
+                Field("Sign-in code", code, { code = codeInput(it) }, hint = "6 digits", keyboard = KeyboardType.NumberPassword, required = true, autofill = Fill.Code,
                     modifier = Modifier.focusRequester(codeFocus))
                 ErrorText(error)
-                PrimaryButton("Sign in", busy = busy, missing = if (code.length >= 6) null else "Enter the 6-digit code first.") { scope.launch { verify() } }
+                PrimaryButton("Verify and sign in", busy = busy, missing = if (codeReady(code)) null else "Enter the 6-digit code first.") { scope.launch { verify() } }
                 if (!totpOnly) SecondaryButton("Send a new code") { scope.launch { passwordStep(true) } }
-                SecondaryButton("Start again") { api.clearTrialServer(); awaitingCode = false; code = ""; password = ""; error = null; notice = null }
+                SecondaryButton("Start over") { api.clearTrialServer(); awaitingCode = false; code = ""; password = ""; error = null; notice = null }
             }
         }
     }

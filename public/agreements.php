@@ -40,8 +40,8 @@ if (isset($_GET['copy'])) {
     ?>
 <h1><?= h($copy['title']) ?>: your signed copy</h1>
 <p>Signed by <strong><?= h($copy['signed_name']) ?></strong> on <?= fmt_datetime($copy['signed_at']) ?>, version <?= (int)$copy['version'] ?>. This is the text exactly as it read when you signed.</p>
-<?php $fixes = staff_agreement_corrections_after((int)$copy['agreement_id'], (int)$copy['version'], (string)$copy['signed_at']); if ($fixes): ?>
-<p>Small corrections were made to the current text after you signed: <?= h(implode('; ', array_map(fn($f) => fmt_datetime($f['changed_at']) . ($f['name'] ? ' by ' . $f['name'] : ''), $fixes))) ?>. Your copy above is unchanged.</p>
+<?php $fixesText = staff_agreement_corrections_text($copy); if ($fixesText !== ''): ?>
+<p><?= h($fixesText) ?></p>
 <?php endif; ?>
 <section class="card" aria-label="Agreement text"><?= staff_agreement_html((string)$copy['body'], 2) ?></section>
 <?php

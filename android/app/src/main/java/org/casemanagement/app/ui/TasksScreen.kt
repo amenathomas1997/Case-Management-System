@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -34,13 +35,24 @@ import org.casemanagement.app.sendOnce
 import org.json.JSONObject
 import java.util.UUID
 
-/** Your open tasks, soonest first; complete one (kept offline when there is no signal) or add one. */
+/**
+ * Your open tasks, soonest first; complete one (kept offline when there is no signal), add, edit or
+ * delete one, filter by words and due date, or complete several at once (4.36.0, as the website).
+ */
 @Composable
-fun TasksScreen(api: Api, nav: NavHostController) {
+fun TasksScreen(api: Api, nav: NavHostController, due0: String = "any") {
     var show by rememberSaveable { mutableStateOf("open") }
-    val state = rememberLoaded(show) { api.call("tasks", mapOf("show" to show)) }
-    var chosen by remember { mutableStateOf<TaskItem?>(null) }
-    var adding by remember { mutableStateOf(false) }
+    var q by rememberSaveable { mutableStateOf("") }
+    var due by rememberSaveable { mutableStateOf(due0) }
+    var qApplied by rememberSaveable { mutableStateOf("") }
+    var dueApplied by rememberSaveable { mutableStateOf(due0) }
+    var applied by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    var announced by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    val state = rememberLoaded(show, qApplied, dueApplied) { api.call("tasks", tasksQuery(show, qApplied, dueApplied)) }
+    var chosenId by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    // -1: no form; 0: a new task; otherwise the task being edited.
+    var editingId by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(-1) }
+    var deletingId by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     // Tasks with a change waiting to send from this phone, and whether it reopens them.
@@ -50,110 +62,132 @@ fun TasksScreen(api: Api, nav: NavHostController) {
         }.toMap()
     }
     val scope = rememberCoroutineScope()
+    val filtered = qApplied.isNotBlank() || dueApplied != "any"
 
-    Show(state, "tasks") { r ->
-        val tasks = parseTasks(r)
-        Page {
-            NoticeText(notice)
-            ErrorText(error)
-            PrimaryButton("Add a task") { adding = true }
-            Choice("Show", show, listOf("open" to "Open tasks", "all" to "All tasks, including done")) { show = it }
+    Page {
+        NoticeText(notice)
+        ErrorText(error)
+        PrimaryButton("Add a task") { editingId = 0 }
+        Choice("Show", show, listOf("open" to "Open tasks", "all" to "All tasks, including done")) { show = it }
+        Field("Search task titles and details", q, { q = it })
+        Choice("Filter: due date", due, dueChoices()) { due = it }
+        PrimaryButton("Apply filters") { qApplied = q.trim(); dueApplied = due; applied++ }
+        if (filtered || q.isNotBlank() || due != "any") SecondaryButton("Clear filters") { q = ""; due = "any"; qApplied = ""; dueApplied = "any"; applied++ }
+        Show(state, "tasks") { r ->
+            val tasks = parseTasks(r)
+            // Said once per Apply or Clear (not again after a rotation).
+            val view = androidx.compose.ui.platform.LocalView.current
+            val k = if (applied > 0 && !state.loading) applied else 0
+            androidx.compose.runtime.LaunchedEffect(k) {
+                if (k > 0 && k != announced) { announced = k; @Suppress("DEPRECATION") view.announceForAccessibility(tasksAppliedText(tasks.size, dueApplied, filtered)) }
+            }
             Heading("${if (show == "open") "Open tasks" else "All tasks"} (${tasks.size})")
-            if (tasks.isEmpty()) Text("No tasks.")
+            if (r.optBoolean("truncated")) Text(TASKS_CUT_TEXT)
+            if (tasks.isEmpty()) Text(tasksEmptyText(filtered))
+            if (tasks.count { it.open } >= 2) SecondaryButton("Complete several tasks at once") {
+                // The open tasks shown here: the same search and due filter.
+                nav.navigate("tasksBulk?q=" + routeArg(qApplied) + "&due=" + routeArg(dueApplied))
+            }
             tasks.forEach { t ->
                 val id = t.id
                 val status = queued[id]?.let { reopen -> if (reopen) "Reopened, waiting to send" else "Done, waiting to send" } ?: t.status
-                ListRow(listOf(t.title, listOfNotNull(status, org.casemanagement.app.doneTaskDueText(t) { d -> dayText(d) }, t.clientName, t.assignedName?.let { "for $it" }).joinToString(", ")),
-                    action = "see what you can do", onClick = if (id in queued) null else ({ chosen = t }))
+                ListRow(listOf(t.title, listOfNotNull(status, org.casemanagement.app.doneTaskDueText(t) { d -> dayText(d) }, t.clientName, t.assignedName?.let { "for $it" },
+                    if (t.automatic) "automatic" else null).joinToString(", ")),
+                    action = "see what you can do", onClick = if (id in queued) null else ({ chosenId = id }))
+            }
+            val canDelete = r.optBoolean("can_delete")
+            tasks.firstOrNull { chosenId > 0 && it.id == chosenId }?.let { t ->
+                TaskActionsDialog(t, canDelete, onClose = { chosenId = 0 }, onDone = {
+                    chosenId = 0; error = null
+                    val open = t.open
+                    scope.launch {
+                        try {
+                            val body = JSONObject().put("id", t.id).put("idem_key", UUID.randomUUID().toString())
+                            if (!open) body.put("reopen", true)
+                            val s = saveOrQueue(api, "complete_task", body, (if (open) "Task done: " else "Reopen task: ") + t.title.take(40),
+                                if (open) "Task completed." else "Task reopened.")
+                            notice = s.message
+                            if (s.reply != null) state.reload()
+                        } catch (e: ApiException) { error = e.message }
+                    }
+                }, onEdit = { chosenId = 0; editingId = t.id }, onClient = { chosenId = 0; nav.navigate("client/${t.clientId}") },
+                    onReferral = { chosenId = 0; nav.navigate("referral/${t.referralId}") }, onDelete = { chosenId = 0; deletingId = t.id })
+            }
+            tasks.firstOrNull { deletingId > 0 && it.id == deletingId }?.let { t ->
+                Confirm(deleteConfirmTitle(t.title), "This cannot be undone.", "Delete", {
+                    scope.launch {
+                        error = null; notice = null
+                        try { notice = api.call("delete_task", body = JSONObject().put("id", t.id)).optString("message").ifEmpty { "Task deleted." } }
+                        catch (e: ApiException) { error = e.message }
+                        state.reload()
+                    }
+                }, { deletingId = 0 }, no = "Keep it")
+            }
+            val editing = if (editingId == 0) null else tasks.firstOrNull { it.id == editingId }
+            if (editingId == 0 || editing != null) key(org.casemanagement.app.dialogKey("task", editingId)) {
+                TaskFormDialog(api, r, editing, onDone = { m -> editingId = -1; notice = m; state.reload() }, onCancel = { editingId = -1 })
             }
         }
     }
-
-    chosen?.let { t ->
-        val open = t.open
-        AlertDialog(
-            onDismissRequest = { chosen = null },
-            title = { Text(t.title, modifier = Modifier.semantics { heading() }) },
-            text = {
-                Column {
-                    t.details?.let { Text(it) }
-                    TextButton(onClick = {
-                        chosen = null; error = null
-                        scope.launch {
-                            try {
-                                val body = JSONObject().put("id", t.id).put("idem_key", UUID.randomUUID().toString())
-                                if (!open) body.put("reopen", true)
-                                val s = saveOrQueue(api, "complete_task", body, (if (open) "Task done: " else "Reopen task: ") + t.title.take(40),
-                                    if (open) "Task completed." else "Task reopened.")
-                                notice = s.message
-                                if (s.reply != null) state.reload()
-                            } catch (e: ApiException) { error = e.message }
-                        }
-                    }) { Text(if (open) "Mark as done" else "Reopen") }
-                    if (t.canOpenClient && t.clientId != null) {
-                        TextButton(onClick = { chosen = null; nav.navigate("client/${t.clientId}") }) { Text("Open " + (t.clientName ?: "the client")) }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
-        )
-    }
-
-    if (adding) AddTaskDialog(api, onDone = { m -> adding = false; notice = m; state.reload() }, onCancel = { adding = false })
 }
 
+/** What can be done with one task: done or reopen, edit, open its client or referral, delete. */
 @Composable
-private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    // Kept across rotation and process death (4.28.0).
-    var title by rememberSaveable { mutableStateOf("") }
-    var due by rememberSaveable { mutableStateOf("") }
-    var details by rememberSaveable { mutableStateOf("") }
-    var idem by rememberSaveable { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var dueError by remember { mutableStateOf<String?>(null) }
-    var titleError by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    val scope = rememberCoroutineScope()
+private fun TaskActionsDialog(t: TaskItem, canDelete: Boolean, onClose: () -> Unit, onDone: () -> Unit, onEdit: () -> Unit,
+                              onClient: () -> Unit, onReferral: () -> Unit, onDelete: () -> Unit) {
+    val actions = taskActions(t, canDelete)
     AlertDialog(
-        onDismissRequest = onCancel,
-        title = { Text("Add a task", modifier = Modifier.semantics { heading() }) },
+        onDismissRequest = onClose,
+        title = { Text(t.title, modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("What needs doing?", title, { title = it }, required = true, error = titleError)
-                Field("Due date", due, { due = it }, hint = "optional, year-month-day such as ${today()}", error = dueError)
-                Field("Details", details, { details = it }, hint = "optional", singleLine = false, minLines = 3)
-                ErrorText(error, focusKey = presses)
+                t.details?.let { Text(it) }
+                TextButton(onClick = onDone) { Text(if (t.open) "Mark as done" else "Reopen") }
+                if ("edit" in actions) TextButton(onClick = onEdit) { Text("Edit task") }
+                if ("client" in actions) TextButton(onClick = onClient) { Text("Open " + (t.clientName ?: "the client")) }
+                if ("referral" in actions) TextButton(onClick = onReferral) { Text("Open referral") }
+                if ("delete" in actions) TextButton(onClick = onDelete) { Text("Delete") }
             }
         },
-        confirmButton = {
-            TextButton(enabled = !busy, onClick = {
-                presses++
-                titleError = if (title.isBlank()) "The task needs a title: say what needs doing." else null
-                dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
-                errorSummary(listOf(titleError, dueError))?.let { error = it; return@TextButton }
-                scope.launchSave({ busy = it }, { error = it }) {
-                    val r = api.callOnce("save_task", JSONObject().put("title", title.trim()).put("due_date", due.trim()).put("details", details.trim()), idem, { idem = it }, "the task")
-                    onDone(r.optString("message").ifEmpty { "Task added." })
-                }
-            }) { Text(if (busy) "Saving…" else "Add") }
-        },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
     )
 }
 
-/** Alerts, newest first; reading them marks them read. */
+/** Alerts, newest first; each opens its page, and marking read can be undone for 15 minutes (4.36.0). */
 @Composable
-fun AlertsScreen(api: Api) {
+fun AlertsScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { parseNotifications(api.call("notifications")) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var undoIds by rememberSaveable { mutableStateOf("") }
+    var undoStamp by rememberSaveable { mutableStateOf("") }
+    var undoCount by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    var undoAt by rememberSaveable { mutableStateOf(0L) }
+    var opening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    androidx.compose.runtime.LaunchedEffect(undoAt) {
+        if (undoAt > 0) {
+            val left = 15 * 60 * 1000L - (System.currentTimeMillis() - undoAt)
+            if (left > 0) kotlinx.coroutines.delay(left)
+            undoAt = 0
+        }
+    }
     Show(state, "alerts") { r ->
         val list = r.items
         Page {
             NoticeText(notice)
             ErrorText(error)
+            if (undoCount > 0 && undoStillOffered(undoAt, System.currentTimeMillis())) SecondaryButton(undoLabel(undoCount)) {
+                scope.launch {
+                    error = null
+                    try {
+                        notice = api.call("mark_notifications_unread", body = JSONObject().put("ids", undoIds).put("stamp", undoStamp)).optString("message")
+                    } catch (e: ApiException) { error = e.message }
+                    undoAt = 0; undoCount = 0
+                    state.reload()
+                }
+            }
             val unread = r.unread
             // 4.34.0: only the alerts listed here are marked (the website's rule); older ones then list.
             val listedUnread = list.count { it.unread }
@@ -163,14 +197,38 @@ fun AlertsScreen(api: Api) {
                     try {
                         val ids = org.casemanagement.app.markReadIds(list)
                         val b = if (ids.isEmpty()) JSONObject().put("all", true) else JSONObject().put("ids", ids)
-                        notice = api.call("mark_notifications_read", body = b).optString("message").ifEmpty { "Marked as read." }; state.reload()
+                        val res = api.call("mark_notifications_read", body = b)
+                        notice = res.optString("message").ifEmpty { "Marked as read." }
+                        res.optJSONObject("undo")?.let { u ->
+                            undoIds = u.optString("ids"); undoStamp = u.optString("stamp"); undoCount = u.optInt("count"); undoAt = System.currentTimeMillis()
+                        }
+                        state.reload()
                     }
                     catch (e: ApiException) { error = e.message }
                 }
             }
             Heading("Alerts (${list.size})")
             if (list.isEmpty()) Text("No alerts.")
-            list.forEach { n -> ListRow(listOf((if (n.unread) "Unread: " else "") + n.message, whenText(n.createdAt))) }
+            list.forEach { n ->
+                val link = n.link
+                ListRow(listOf((if (n.unread) "Unread: " else "") + n.message, whenText(n.createdAt)), action = if (link != null) "open it" else null,
+                    onClick = if (link == null) null else ({
+                        // One tap at a time: a double tap opens it once.
+                        if (!opening) {
+                            opening = true
+                            scope.launch {
+                                try {
+                                    error = null
+                                    // Opening an unread alert marks it read first, as the website's link does; a failure is not in the way.
+                                    if (n.unread) try { api.call("mark_notifications_read", body = JSONObject().put("ids", n.id.toString())) } catch (e: ApiException) { }
+                                    val route = try { alertRoute(link) { api.can(it) } } catch (e: Exception) { null }
+                                    if (route != null) nav.navigate(route)
+                                    else if (!openSitePage(api, context, alertSitePath(link))) error = "No browser on this phone can open the website."
+                                } finally { opening = false }
+                            }
+                        }
+                    }))
+            }
         }
     }
 }
@@ -197,9 +255,11 @@ fun ReferralsScreen(api: Api, nav: NavHostController) {
 /** Conversations with clients (and their counselors) through the client portal. */
 @Composable
 fun MessagesScreen(api: Api, nav: NavHostController) {
-    val state = rememberLoaded(api.userId) { parseMessageThreads(api.call("message_threads")) }
+    val state = rememberLoaded(api.userId) { api.call("message_threads") }
     val clients = rememberLoaded(api.userId) { openClientChoices(api.call("client_choices")) }
-    Show(state, "messages") { list ->
+    Show(state, "messages") { raw ->
+        val list = parseMessageThreads(raw)
+        val totals = org.casemanagement.app.parseThreadTotals(raw)
         Page {
             // A new conversation: any client's thread opens from here.
             val choices = clients.data ?: emptyList()
@@ -207,10 +267,15 @@ fun MessagesScreen(api: Api, nav: NavHostController) {
                 if (id.isNotEmpty()) nav.navigate("thread/$id")
             }
             Heading("Conversations (${list.size})")
+            // 4.36.0: unread first, then the newest, with the last message, as the website.
+            totals?.let { (total, unreadTotal) ->
+                Text(unreadTotalText(unreadTotal))
+                threadsCutText(list.size, total)?.let { Text(it) }
+            }
             if (list.isEmpty()) Text("No messages.")
             list.forEach { t ->
                 val unread = org.casemanagement.app.threadUnreadWords(t)
-                ListRow(listOf(t.clientName, (if (unread.isNotEmpty()) "$unread, " else "") + "last " + whenText(t.lastAt)),
+                ListRow(listOfNotNull(t.clientName, threadPreview(t.lastSenderLabel, t.lastBody), (if (unread.isNotEmpty()) "$unread, " else "") + "last " + whenText(t.lastAt)),
                     onClick = { nav.navigate("thread/${t.clientId}?channel=" + org.casemanagement.app.startChannel(t.unreadClient, t.unreadCounselor)) })
             }
         }
@@ -269,6 +334,8 @@ fun ThreadScreen(api: Api, clientId: Int, startOn: String = "client") {
                     }))
             }
             NoticeText(notice)
+            // 4.36.0: said before typing, as the website: the counselor portal does not show this client yet.
+            if (channel == "counselor" && r.counselorUnconfirmed) r.counselorUnconfirmedText?.let { Text(it) }
             Field("Your message", text, { text = it }, hint = if (attach != null) "optional with a file" else null, singleLine = false, minLines = 3, required = attach == null)
             val a = attach
             // Files with messages need a 4.25.0 server (an older one would drop the file unsaid).
@@ -314,7 +381,7 @@ fun ThreadScreen(api: Api, clientId: Int, startOn: String = "client") {
                     attach = null
                     sendKey = ""
                     // A repeat the server recognised (an earlier try whose reply was lost) is said as such.
-                    notice = res.str("warning") ?: if (res.optBoolean("repeat")) "This message had already been sent from an earlier try, so it was not sent twice." else "Message sent."
+                    notice = sentMessage(!res.optBoolean("repeat"), res.str("warning"), res.optBoolean("noticed"))
                     state.reload()
                 }
             }

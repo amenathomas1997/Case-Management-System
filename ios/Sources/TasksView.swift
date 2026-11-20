@@ -53,6 +53,22 @@ struct TasksResponse: Decodable {
     let canAssign: Bool?
     let canLinkClient: Bool?
     let staff: [TaskStaffChoice]?
+    /// Whether this account may delete a task (administrators, 4.36.0); nil from an older server.
+    let canDelete: Bool?
+}
+
+/// complete_tasks's reply (4.36.0): how many were completed and the website's sentence.
+struct TasksCompletedResult: Decodable { let completed: Int?; let message: String }
+
+/// The website's "Filter: due date" choices (tasks.php), in its order.
+let taskDueChoices: [(value: String, label: String)] = [
+    ("any", "Any due date"), ("overdue", "Overdue"), ("today", "Due today (open)"),
+    ("week", "Next 7 days (open)"), ("none", "No due date"),
+]
+
+/// "<title>, <client>, due <date>", as the website's Complete several tasks at once.
+func bulkTaskLabel(_ t: TaskItem) -> String {
+    t.title + (t.clientName.map { ", " + $0 } ?? "") + (t.dueDate.map { ", due " + formatDate($0) } ?? "")
 }
 
 struct TaskSaveResult: Decodable { let ok: Bool; let id: Int?; let message: String? }
@@ -94,6 +110,18 @@ struct TasksView: View {
     @State private var sheetResult: String?
     @State private var openClient: Int?
     @State private var openReferral: Int?
+    /// The website's due-date filter (4.36.0): any, overdue, today, week or none.
+    @State private var due: String
+    /// A task waiting for its permanent-delete confirmation (administrators, 4.36.0).
+    @State private var deleting: TaskItem?
+    @State private var completingSeveral = false
+    /// The open tasks as they were when Complete several tasks at once was opened: the sheet's
+    /// choices never change under the person while it is open.
+    @State private var bulkTasks: [TaskItem] = []
+
+    init(due: String = "any") {
+        _due = State(initialValue: taskDueChoices.contains { $0.value == due } ? due : "any")
+    }
     /// After a task is completed or reopened, VoiceOver goes to that task, or to the one now in
     /// its place (-1: the empty-list text, -2: the error banner).
     @AccessibilityFocusState private var focusedTask: Int?
@@ -122,14 +150,25 @@ struct TasksView: View {
                         .id(errorRow)
                         .accessibilityFocused($focusedTask, equals: -2)
                 }
+                // The website's due-date filter, visible as the list's first row (not in a menu),
+                // a quiet picker: the result is said once the list has loaded.
+                Picker("Filter: due date", selection: $due) {
+                    ForEach(taskDueChoices, id: \.value) { choice in Text(choice.label).tag(choice.value) }
+                }
+                .onChange(of: due) { _ in Task { await load(announceFilter: true) } }
                 if let data {
                     if data.tasks.isEmpty {
-                        Text(search.isEmpty ? (showAll ? "No tasks." : "No open tasks.") : "No tasks match this search.")
+                        Text(filtered ? "No tasks match these filters." : (showAll ? "No tasks." : "No open tasks."))
                             .foregroundStyle(Color.secondaryText)
                             .accessibilityFocused($focusedTask, equals: -1)
                     }
                     if data.truncated == true {
-                        Text("Showing the first 300 matches. Search to narrow the list.").font(.callout)
+                        Text("Showing the first 300 matches. Narrow your filters to find more specific tasks.").font(.callout)
+                    }
+                    if openShown.count >= 2 {
+                        Button { openBulk() } label: {
+                            Label("Complete several tasks at once", systemImage: "checklist.checked")
+                        }
                     }
                     ForEach(groups) { group in
                         Section {
@@ -168,6 +207,25 @@ struct TasksView: View {
                     Task { await load(announceView: true) }
                 }
             }
+            if openShown.count >= 2 {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Complete several tasks at once") { openBulk() }
+                }
+            }
+        }
+        .confirmationDialog(deleting.map { "Delete the task “\($0.title)” permanently?" } ?? "Delete this task permanently?",
+                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { task in
+            Button("Delete", role: .destructive) { Task { await delete(task) } }
+            Button("Keep it", role: .cancel) {}
+        } message: { _ in
+            Text("This cannot be undone.")
+        }
+        .sheet(isPresented: $completingSeveral, onDismiss: announceSheetResult) {
+            BulkCompleteSheet(tasks: bulkTasks, reload: { await load(); return openShown }) { message in
+                sheetResult = message
+                Task { await load() }
+            }
         }
         .navigationDestination(isPresented: Binding(get: { openClient != nil }, set: { if !$0 { openClient = nil } })) {
             if let id = openClient { ClientDetailView(clientId: id) }
@@ -187,45 +245,111 @@ struct TasksView: View {
         .task { await load() }
     }
 
+    private func openBulk() {
+        bulkTasks = openShown
+        completingSeveral = true
+    }
+
+    /// The open tasks on screen, in the order shown (for Complete several tasks at once).
+    private var openShown: [TaskItem] { groups.filter { $0.id != "Done" }.flatMap(\.tasks) }
+
+    /// A search or a due-date filter is narrowing the list.
+    private var filtered: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || due != "any"
+    }
+
     @ViewBuilder private func row(_ task: TaskItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(task.title).font(.body.weight(.semibold))
-            Text(task.dueText).font(.callout)
-                .foregroundStyle((task.daysLeft ?? 0) < 0 && task.isOpen ? Color.alertRed : Color.secondaryText)
-            if let client = task.clientName { Text("Client: \(client)").font(.caption).foregroundStyle(Color.secondaryText) }
-            if task.referralId != nil { Text("Referral: \(task.referralName ?? "")").font(.caption).foregroundStyle(Color.secondaryText) }
-            Text("Assigned to \(task.assignedName ?? "anyone")\(task.automatic ? " · automatic" : "")")
-                .font(.caption).foregroundStyle(Color.secondaryText)
-            if let details = task.details, !details.isEmpty { Text(details).font(.callout) }
-            HStack(spacing: 16) {
-                if queuedTasks.contains(task.id) {
-                    Text("Waiting to send").font(.callout).foregroundStyle(Color.secondaryText)
-                } else {
-                    Button(task.isOpen ? "Done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
-                        .buttonStyle(.borderless)
-                        .frame(minHeight: 44)
-                }
-                if task.isOpen && !task.automatic {
-                    Button("Edit") { editing = task }
-                        .buttonStyle(.borderless)
-                        .frame(minHeight: 44)
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(task.title).font(.body.weight(.semibold))
+                Text(task.dueText).font(.callout)
+                    .foregroundStyle((task.daysLeft ?? 0) < 0 && task.isOpen ? Color.alertRed : Color.secondaryText)
+                if let client = task.clientName { Text("Client: \(client)").font(.caption).foregroundStyle(Color.secondaryText) }
+                if task.referralId != nil { Text("Referral: \(task.referralName ?? "")").font(.caption).foregroundStyle(Color.secondaryText) }
+                Text("Assigned to \(task.assignedName ?? "anyone")\(task.automatic ? " · automatic" : "")")
+                    .font(.caption).foregroundStyle(Color.secondaryText)
+                if let details = task.details, !details.isEmpty { Text(details).font(.callout) }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // One VoiceOver stop per task, with its actions on the Actions rotor too.
+            .accessibilityElement(children: VoiceOverRows.children)
+            .accessibilityLabel(task.spoken)
+            .accessibilityFocused($focusedTask, equals: task.id)
+            .accessibilityAction { announceRowActions() }
+            .accessibilityActions {
+                if !queuedTasks.contains(task.id) {
+                    Button(task.isOpen ? "Mark done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
+                }
+                if task.isOpen && !task.automatic { Button("Edit task") { editing = task } }
+                if task.canOpenClient, let id = task.clientId { Button("Open client record") { openClient = id } }
+                if task.canOpenReferral, let id = task.referralId { Button("Open referral") { openReferral = id } }
+                if data?.canDelete == true { Button("Delete") { deleting = task } }
+            }
+            // 4.36.0: the buttons sit outside the row's one VoiceOver stop, so each is reached by
+            // swiping as well as on the rotor (nothing is rotor-only), each naming the task.
+            rowButtons(task)
         }
         .padding(.vertical, 2)
-        // One VoiceOver stop per task; Done / Reopen, Edit and the linked records are on the
-        // Actions rotor.
-        .accessibilityElement(children: VoiceOverRows.children)
-        .accessibilityLabel(task.spoken)
-        .accessibilityFocused($focusedTask, equals: task.id)
-        .accessibilityAction { announceRowActions() }
-        .accessibilityActions {
-            if !queuedTasks.contains(task.id) {
-                Button(task.isOpen ? "Mark done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
-            }
-            if task.isOpen && !task.automatic { Button("Edit task") { editing = task } }
-            if task.canOpenClient, let id = task.clientId { Button("Open client record") { openClient = id } }
-            if task.canOpenReferral, let id = task.referralId { Button("Open referral") { openReferral = id } }
+    }
+
+    @ViewBuilder private func rowButtons(_ task: TaskItem) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) { rowButtonList(task) }
+            VStack(alignment: .leading, spacing: 4) { rowButtonList(task) }
+        }
+    }
+
+    @ViewBuilder private func rowButtonList(_ task: TaskItem) -> some View {
+        if queuedTasks.contains(task.id) {
+            Text("Waiting to send").font(.callout).foregroundStyle(Color.secondaryText)
+        } else {
+            Button(task.isOpen ? "Done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel(task.isOpen ? "Done: \(task.title)" : "Reopen \(task.title)")
+                .accessibilityInputLabels([task.isOpen ? "Done" : "Reopen"])
+        }
+        if task.isOpen && !task.automatic {
+            Button("Edit") { editing = task }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Edit \(task.title)")
+                .accessibilityInputLabels(["Edit"])
+        }
+        if task.canOpenClient, let id = task.clientId {
+            Button("Open client record") { openClient = id }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Open client record for \(task.title)")
+                .accessibilityInputLabels(["Open client record"])
+        }
+        if task.canOpenReferral, let id = task.referralId {
+            Button("Open referral") { openReferral = id }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Open referral for \(task.title)")
+                .accessibilityInputLabels(["Open referral"])
+        }
+        if data?.canDelete == true {
+            Button("Delete", role: .destructive) { deleting = task }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Delete \(task.title)")
+                .accessibilityInputLabels(["Delete"])
+        }
+    }
+
+    /// delete_task (administrators): permanent, asked first; the website's sentences.
+    private func delete(_ task: TaskItem) async {
+        deleting = nil
+        error = nil
+        do {
+            let r: TaskSaveResult = try await api.call("delete_task", method: "POST", body: ["id": task.id])
+            await load()
+            announceAfterDismiss(r.message ?? "Task deleted.")
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+            await load()
         }
     }
 
@@ -267,21 +391,115 @@ struct TasksView: View {
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
-    private func load(announceView: Bool = false) async {
+    private func load(announceView: Bool = false, announceFilter: Bool = false) async {
         let wantsAll = showAll
+        let wantsDue = due
         var query = ["show": wantsAll ? "all" : "open"]
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
         if !q.isEmpty { query["q"] = q }
+        if wantsDue != "any" { query["due"] = wantsDue }
         do {
             error = nil
             let r: TasksResponse = try await api.call("tasks", query: query)
-            guard wantsAll == showAll else { return }
+            guard wantsAll == showAll, wantsDue == due else { return }
             data = r
             if announceView { announce(wantsAll ? "Showing all tasks, including done." : "Showing open tasks only.") }
+            else if announceFilter { announce(tasksFilterSummary(r.tasks.count, due: wantsDue)) }
             else if !q.isEmpty { announce("\(r.tasks.count) task\(r.tasks.count == 1 ? "" : "s") found.") }
         } catch {
-            guard wantsAll == showAll else { return }
+            guard wantsAll == showAll, wantsDue == due else { return }
             showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+}
+
+/// What a due-date filter found, said once: "3 tasks overdue." or "No tasks match these filters."
+func tasksFilterSummary(_ count: Int, due: String) -> String {
+    guard count > 0 else { return "No tasks match these filters." }
+    let words = ["overdue": "overdue", "today": "due today", "week": "due in the next 7 days", "none": "with no due date"][due] ?? "shown"
+    return "\(count) task\(count == 1 ? "" : "s") \(words)."
+}
+
+/// Complete several open tasks in one step, as the website's "Complete several tasks at once".
+struct BulkCompleteSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    /// Loads the task list again and gives its open tasks (after the server completed none).
+    let reload: () async -> [TaskItem]
+    let onDone: (String) -> Void
+    /// The choices, fixed when the sheet opened; replaced only by a reload after a refusal.
+    @State private var tasks: [TaskItem]
+    @State private var chosen: Set<Int> = []
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section {
+                    if tasks.isEmpty { Text("No open tasks.") }
+                    ForEach(tasks) { task in
+                        Toggle(bulkTaskLabel(task), isOn: Binding(get: { chosen.contains(task.id) },
+                                                                  set: { on in if on { chosen.insert(task.id) } else { chosen.remove(task.id) } }))
+                    }
+                } header: {
+                    Text("Open tasks").font(.headline).foregroundStyle(.primary).textCase(nil)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                Section {
+                    Button { Task { await complete() } } label: {
+                        Text(busy ? "Completing…" : "Complete the chosen tasks (\(chosenIds.count))")
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .disabled(busy)
+                    .accessibilityLabel("Complete the chosen tasks (\(chosenIds.count))")
+                }
+            }
+            .navigationTitle("Complete several tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+            }
+            .interactiveDismissDisabled(busy)
+        }
+    }
+
+    init(tasks: [TaskItem], reload: @escaping () async -> [TaskItem], onDone: @escaping (String) -> Void) {
+        _tasks = State(initialValue: tasks)
+        self.reload = reload
+        self.onDone = onDone
+    }
+
+    /// The chosen tasks still listed, in the order shown (the count and what is sent agree).
+    private var chosenIds: [Int] { tasks.map(\.id).filter { chosen.contains($0) } }
+
+    private func complete() async {
+        guard !chosenIds.isEmpty else {
+            showFormError("Nothing was completed: choose at least one open task.", in: &error)
+            return
+        }
+        busy = true
+        error = nil
+        defer { busy = false }
+        // In the order shown, so the same choice always sends the same request (and key).
+        var body: [String: Any] = ["task_ids": chosenIds]
+        body["idem_key"] = idem.key(for: body)
+        do {
+            let r: TasksCompletedResult = try await api.call("complete_tasks", method: "POST", body: body)
+            idem.answered()
+            onDone(r.message)
+            dismiss()
+        } catch APIError.server(let message) {
+            // Nothing was completed (done or removed meanwhile): the list and choices are
+            // brought up to date, and the server's sentence is said.
+            idem.answered()
+            tasks = await reload()
+            chosen = chosen.intersection(tasks.map(\.id))
+            showFormError(message, in: &self.error)
+        } catch {
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error), in: &self.error)
         }
     }
 }

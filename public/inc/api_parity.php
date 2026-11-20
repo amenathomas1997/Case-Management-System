@@ -102,7 +102,10 @@ if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD
     if ($idemCreates && $idemKey !== null) {
         $idemPrev = api_idem_begin($action, $userId, $idemKey);
         // 4.35.0: a repeat of a group booking, a group's attendance or offered times rebuilds its lists (inc/api_435.php).
-        if ($idemPrev !== null) out(function_exists('api_435_repeat') ? api_435_repeat($action, $input, $userId, $idemPrev) : $idemPrev);
+        // 4.36.0: and a phone's sign-out or wipe, a privacy incident and hours added (inc/api_436.php).
+        if ($idemPrev !== null && function_exists('api_435_repeat')) $idemPrev = api_435_repeat($action, $input, $userId, $idemPrev);
+        if ($idemPrev !== null && function_exists('api_436_repeat')) $idemPrev = api_436_repeat($action, $input, $userId, $idemPrev);
+        if ($idemPrev !== null) out($idemPrev);
         $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
     }
     unset($idemCreates, $idemKey, $idemPrev);
@@ -337,6 +340,8 @@ case 'tasks': {
     $isAdmin = can('admin');
     out(['ok' => true, 'tasks' => array_map('parity_task_row', $rows), 'filters' => $filters,
         'truncated' => count($rows) === 300, 'today' => date('Y-m-d'),
+        // 4.36.0: only an administrator deletes a task (tasks.php; delete_task in inc/api_436.php).
+        'can_delete' => $isAdmin,
         // As the page's form: only an administrator chooses who a task is for; a client is
         // linked only with the clients permission.
         'can_assign' => $isAdmin, 'can_link_client' => can('clients'),
@@ -443,27 +448,24 @@ case 'mark_notifications_read': {
     // As the page: only the alerts the app listed (ids, comma-separated, at most 100), so
     // newer ones that arrived meanwhile stay unread; "all" marks every unread alert.
     $all = !empty($input['all']);
-    $ids = array_slice(array_values(array_unique(array_filter(array_map('intval',
-        explode(',', is_string($input['ids'] ?? null) ? $input['ids'] : (is_int($input['ids'] ?? null) ? (string)$input['ids'] : ''))), fn($i) => $i > 0))), 0, 100);
-    $marked = 0;
-    if ($all) {
-        $mr = db()->prepare('UPDATE notifications SET read_at = NOW() WHERE user_id = ? AND read_at IS NULL');
-        $mr->execute([$userId]);
-        $marked = $mr->rowCount();
-    } elseif ($ids) {
-        $mr = db()->prepare('UPDATE notifications SET read_at = NOW() WHERE user_id = ? AND read_at IS NULL AND id IN ('
-            . implode(',', array_fill(0, count($ids), '?')) . ')');
-        $mr->execute(array_merge([$userId], $ids));
-        $marked = $mr->rowCount();
-    } else {
-        fail('Choose the alerts to mark as read.', 422);
-    }
+    $ids = alerts_ids($input['ids'] ?? '');
+    if (!$all && !$ids) fail('Choose the alerts to mark as read.', 422);
+    // inc/alerts.php, shared with notifications.php (4.36.0): one stamp for the batch, so it can be undone.
+    $r = alerts_mark_read($userId, $ids, $all);
+    out(['ok' => true, 'marked' => $r['marked'], 'unread' => $r['left'], 'message' => alerts_marked_message($r['marked'], $r['left'])]
+        // A batch marked with "all" is undone by its stamp alone: undo.ids is "" (send it back as it is).
+        + ($r['marked'] > 0 ? ['undo' => ['ids' => implode(',', $r['ids']), 'stamp' => $r['stamp'], 'count' => $r['marked'], 'all' => $all]] : []));
+}
+
+case 'mark_notifications_unread': {
+    $parityRequirePost();
+    // Undo a mark-as-read (4.36.0): only the caller's alerts, only that batch (its stamp), only for 15 minutes.
+    // ids "" (a batch marked with "all") restores every alert of the caller's carrying that stamp.
+    $restored = alerts_undo($userId, alerts_ids($input['ids'] ?? ''), is_string($input['stamp'] ?? null) ? $input['stamp'] : '');
+    if ($restored === 0) fail(alerts_undo_message(0), 409);
     $left = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read_at IS NULL');
     $left->execute([$userId]);
-    $left = (int)$left->fetchColumn();
-    out(['ok' => true, 'marked' => $marked, 'unread' => $left,
-        'message' => $marked . ' alert' . ($marked === 1 ? '' : 's') . ' marked as read.'
-            . ($left ? ' ' . $left . ' more unread alert' . ($left === 1 ? ' is' : 's are') . ' listed now.' : '')]);
+    out(['ok' => true, 'restored' => $restored, 'unread' => (int)$left->fetchColumn(), 'message' => alerts_undo_message($restored)]);
 }
 
 /* ---------- Client self-service requests (portal_requests.php) ---------- */
@@ -918,58 +920,8 @@ case 'request_consent': {
 }
 
 case 'consents_due': {
-    // compliance.php's "Consents & releases to renew", same query, rules and order.
-    $scoped = caseload_scoped();
-    $scopeSql = $scoped ? ' AND c.assigned_to = ?' : '';
-    $scopeArg = $scoped ? [$userId] : [];
-    $today = date('Y-m-d');
-    $soon = date('Y-m-d', strtotime('+30 days'));
-    $validDays = (int)(setting('consent_validity_days') ?: 365);
-    $cf = db()->prepare("SELECT c.id AS cid, c.name AS client, c.dob,
-            s.guardian_name AS signed_guardian, s.signed_at, s.withdrawn_at,
-            p.guardian_name AS pending_guardian, p.sent_at AS pending_sent_at
-        FROM clients c
-        LEFT JOIN consent_forms s ON s.id = (SELECT x.id FROM consent_forms x WHERE x.client_id = c.id AND x.signed_at IS NOT NULL
-            ORDER BY x.signed_at DESC, x.id DESC LIMIT 1)
-        LEFT JOIN consent_forms p ON p.id = (SELECT y.id FROM consent_forms y WHERE y.client_id = c.id AND y.signed_at IS NULL
-            ORDER BY y.sent_at DESC, y.id DESC LIMIT 1)
-        WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND (s.id IS NOT NULL OR p.id IS NOT NULL)" . $scopeSql);
-    $cf->execute($scopeArg);
-    $consentRisk = [];
-    $unsignedBefore = date('Y-m-d', strtotime('-14 days'));
-    // 4.34.0, as compliance.php (4.29.0): the date a client turned 18, once it has passed, or null:
-    // a guardian's consent signed before then no longer speaks for the client.
-    $adultSince = function (?string $dob) use ($today): ?string {
-        if (!$dob || strtotime($dob) === false) return null;
-        $d = date('Y-m-d', strtotime($dob . ' +18 years'));
-        return $d <= $today ? $d : null;
-    };
-    foreach ($cf->fetchAll() as $f) {
-        $f['kind'] = null;
-        $adult = $adultSince($f['dob'] ?? null);
-        $f['guardian_name'] = $f['signed_at'] ? $f['signed_guardian'] : $f['pending_guardian'];
-        if ($f['signed_at'] && $f['withdrawn_at']) {
-            $f['kind'] = 'Withdrawn'; $f['when'] = substr($f['withdrawn_at'], 0, 10);
-        } elseif ($f['signed_at'] && $adult !== null && substr($f['signed_at'], 0, 10) < $adult) {
-            $f['kind'] = 'Adult'; $f['when'] = $adult;
-        } elseif ($f['signed_at']) {
-            $exp = date('Y-m-d', strtotime($f['signed_at'] . ' +' . $validDays . ' days'));
-            if ($exp <= $soon) { $f['kind'] = $exp < $today ? 'Expired' : 'Expiring'; $f['when'] = $exp; }
-        } elseif ($f['pending_sent_at'] < $unsignedBefore) {
-            $f['kind'] = 'Unsigned'; $f['when'] = $f['pending_sent_at'];
-        }
-        if ($f['kind'] !== null) $consentRisk[] = $f;
-    }
-    $noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn', 'Adult'], true) ? 0 : 1;
-    usort($consentRisk, fn($a, $b) => [$noConsent($a), $a['when']] <=> [$noConsent($b), $b['when']]);
-    $items = [];
-    foreach ($consentRisk as $f) {
-        $items[] = ['client_id' => (int)$f['cid'], 'client' => (string)$f['client'], 'guardian_name' => (string)($f['guardian_name'] ?? ''),
-            'kind' => $f['kind'], 'label' => $f['kind'] === 'Unsigned' ? 'Not signed' : ($f['kind'] === 'Adult' ? 'Signed by a guardian before the client turned 18' : $f['kind']), 'date' => substr((string)$f['when'], 0, 10),
-            'pending_sent_at' => $f['kind'] !== 'Unsigned' && $f['pending_sent_at'] ? substr((string)$f['pending_sent_at'], 0, 10) : null,
-            'action' => $f['pending_sent_at'] ? 'Resend consent request' : ($f['kind'] === 'Withdrawn' ? 'Request new consent' : ($f['kind'] === 'Adult' ? 'Request the client\'s own consent' : 'Renew consent'))];
-    }
-    out(['ok' => true, 'consents' => $items, 'validity_days' => $validDays]);
+    // compliance.php's "Consents & releases to renew", from the light helper the page's data uses too (inc/compliance_data.php, 4.36.0).
+    out(['ok' => true, 'consents' => compliance_consent_items(compliance_consent_risk(['id' => $userId])), 'validity_days' => (int)(setting('consent_validity_days') ?: 365)]);
 }
 
 /* ---------- Intake pipeline (pipeline.php) ---------- */
@@ -1151,38 +1103,18 @@ case 'check_in_session': {
     // after (a late arrival, or a session checked in only once it is over). The
     // first check-in is kept: a second answers 409 with that time.
     $sid = (int)($input['session_id'] ?? 0);
-    $st = db()->prepare("SELECT s.id, s.start_at, s.checked_in_at, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
-        WHERE s.id = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : ''));
-    $st->execute(caseload_scoped() ? [$sid, $userId] : [$sid]);
-    $sess = $st->fetch();
-    if (!$sess) fail('Session not found or already closed.', 404);
-    if ($sess['checked_in_at'] !== null) fail('Already checked in at ' . date('g:i A', strtotime((string)$sess['checked_in_at'])) . '.', 409);
-    $start = strtotime((string)$sess['start_at']);
-    // An offline check-in (4.27.0) carries checked_in_at, when it was tapped (ISO 8601).
-    // It is recorded as the arrival when believable: no earlier than 2 hours before the
-    // start or later than 12 hours after it, not in the future (5 minutes' clock
-    // difference allowed), and received within 7 days.
+    // An offline check-in (4.27.0) carries checked_in_at, when it was tapped (ISO 8601). Read
+    // here; whether it is believable for this session is checked with the session (inc/session_changes.php).
     $atIn = is_string($input['checked_in_at'] ?? null) ? trim($input['checked_in_at']) : '';
     $atTs = null;
     if ($atIn !== '') {
         $atTs = preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $atIn) ? strtotime($atIn) : false;
         if ($atTs === false) fail('The check-in time could not be read, so the check-in was not recorded. Check the client in again.', 422);
-        if ($atTs > time() + 5 * 60) fail('The check-in time is in the future, so it was not recorded. Check the phone\'s clock, then check the client in again.', 422);
-        if ($atTs < time() - 7 * 86400) fail('That check-in was made more than 7 days ago, so it can no longer be recorded. Record the session\'s outcome instead.', 422);
-        if ($atTs < $start - 2 * 3600 || $atTs > $start + 12 * 3600) fail('The check-in time is not within 2 hours before to 12 hours after the session start, so it was not recorded. Record the session\'s outcome instead.', 422);
-    } else {
-        if ($start > time() + 30 * 60) fail('That session starts at ' . date('g:i A', $start) . ' on ' . date('M j', $start) . '; check-in opens 30 minutes before it.', 422);
-        if ($start < time() - 12 * 3600) fail('That session was scheduled more than 12 hours ago, so it can no longer be checked in. Record its outcome instead.', 422);
     }
-    // Claim: two taps, or a colleague checking in meanwhile, record the first arrival only.
-    $claim = db()->prepare('UPDATE scheduled_sessions SET checked_in_at = ' . ($atTs !== null ? '?' : 'NOW()') . ' WHERE id = ? AND checked_in_at IS NULL');
-    $claim->execute($atTs !== null ? [date('Y-m-d H:i:s', $atTs), $sid] : [$sid]);
-    $at = db()->prepare('SELECT checked_in_at FROM scheduled_sessions WHERE id = ?');
-    $at->execute([$sid]);
-    $checkedIn = (string)$at->fetchColumn();
-    if ($claim->rowCount() !== 1) fail('Already checked in at ' . date('g:i A', strtotime($checkedIn)) . '.', 409);
-    audit($userId, 'session.checkin', 'session', $sid, 'mobile' . ($atTs !== null ? ', offline at ' . date('Y-m-d H:i', $atTs) : ''));
-    out(['ok' => true, 'checked_in_at' => $checkedIn, 'message' => $sess['client_name'] . ' checked in at ' . date('g:i A', strtotime($checkedIn)) . '.']);
+    // Shared with schedule.php's Check in button (4.36.0): the lookup, the windows, the claim and the audit.
+    $ci = session_check_in($sid, $userId, caseload_scoped() ? $userId : null, $atTs, 'mobile');
+    if (!$ci['ok']) fail($ci['error'], $ci['status']);
+    out(['ok' => true, 'checked_in_at' => $ci['checked_in_at'], 'message' => $ci['message']]);
 }
 
 default:

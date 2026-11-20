@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.35.0';
+const APP_VERSION = '4.36.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1802,6 +1802,14 @@ require_once __DIR__ . '/voice_more.php';
 require_once __DIR__ . '/api_more.php';
 require_once __DIR__ . '/api_425.php';
 require_once __DIR__ . '/api_435.php'; // the apps' 4.35.0 actions (field casework)
+// The dashboard's Today and My tasks, alerts read and unread, the conversation list, device
+// follow-ups and the Compliance page's data, each shared by its page and the apps (4.36.0).
+require_once __DIR__ . '/dashboard.php';
+require_once __DIR__ . '/alerts.php';
+require_once __DIR__ . '/messages_list.php';
+require_once __DIR__ . '/device_followups.php';
+require_once __DIR__ . '/compliance_data.php';
+require_once __DIR__ . '/api_436.php'; // the apps' 4.36.0 actions (daily workspace and safety)
 // Funding agencies in other states, client time zones (4.1.0).
 require_once __DIR__ . '/agencies.php';
 // Pricing rules set on screen (4.2.0).

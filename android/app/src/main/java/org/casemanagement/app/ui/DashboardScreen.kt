@@ -14,8 +14,11 @@ import java.util.Locale
 @Composable
 fun DashboardScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) {
-        val toDo = (try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 }) to (try { api.call("training").optInt("needed") } catch (e: Exception) { 0 })
-        Triple(parseDashboard(api.call("dashboard")), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
+        val d = parseDashboard(api.call("dashboard"))
+        // 4.36.0: the counts come with the dashboard; a 4.35.0 server is asked for them as before.
+        val toDo = if (d.agreementsNeeded != null) d.agreementsNeeded to (d.trainingNeeded ?: 0)
+            else (try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 }) to (try { api.call("training").optInt("needed") } catch (e: Exception) { 0 })
+        Triple(d, try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
     }
     // Referral deadlines (4.25.0), for those who work referrals; left out when it cannot be read.
     val deadlines = rememberLoaded(api.userId, api.can("referrals")) {
@@ -29,11 +32,28 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
             Heading("Hello, ${api.userName.substringBefore(' ')}", large = true)
             api.updateNotice?.let { NoticeText(it) }
             if (api.pendingSync > 0) ListRow(listOf("${api.pendingSync} offline ${if (api.pendingSync == 1) "entry" else "entries"} waiting to send"), onClick = { nav.navigate("offline") })
-            if (api.accessHold.isNotEmpty()) NoticeText("Client records open once you finish: " + api.accessHold.joinToString(", ") + ".")
+            if (api.accessHold.isNotEmpty()) {
+                NoticeText("Client records open once you finish: " + api.accessHold.joinToString(", ") + ".")
+                // 4.36.0: both, as the website's banner links them.
+                ListRow(listOf("My agreements"), onClick = { nav.navigate("agreements") })
+                ListRow(listOf("My training"), onClick = { nav.navigate("training") })
+            }
             val (sign, train) = toSign
-            if (sign > 0) ListRow(listOf(if (sign == 1) "An agreement to sign" else "$sign agreements to sign"), action = "read and sign", onClick = { nav.navigate("agreements") })
-            if (train > 0) ListRow(listOf(if (train == 1) "Training to take" else "$train trainings to take"), action = "open My training", onClick = { nav.navigate("training") })
+            // 4.36.0: the website's banners in its order: credentials to renew, training, agreements.
+            bannerRows(sign, train, d.credentialsDue ?: emptyList()).forEach { b ->
+                ListRow(listOf(b.heading, b.text), action = "open it", onClick = { nav.navigate(b.route) })
+            }
             if (unread > 0) ListRow(listOf("$unread unread ${if (unread == 1) "alert" else "alerts"}"), onClick = { nav.navigate("alerts") })
+
+            // 4.36.0: Today, as the website's dashboard: what is due, each opening its list.
+            d.today?.let { items ->
+                Heading(d.todayHeading ?: "Today")
+                if (items.isEmpty()) Text("Nothing due today.")
+                todayRows(items).forEach { row ->
+                    ListRow(listOf(row.text), action = if (row.route != null) "open it" else null,
+                        onClick = row.route?.let { rt -> { nav.navigate(rt) { launchSingleTop = true } } })
+                }
+            }
 
             toWrite.data?.takeIf { it.items.isNotEmpty() && api.can("clients") }?.let { w ->
                 Heading("Notes to write (${w.total})")
@@ -42,12 +62,21 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
                 }
                 if (w.total > 10 && api.can("schedule")) ListRow(listOf("All ${w.total} notes to write are on the Schedule"), action = "open the Schedule", onClick = { nav.navigate("schedule") { launchSingleTop = true } })
             }
+            // 4.36.0: Your week, as under the website's Notes to write.
+            d.weekText?.let { ListRow(listOf(it)) }
 
             Heading("At a glance")
-            ListRow(listOf("Active clients: ${d.activeClients}"))
-            ListRow(listOf("Waiting for assessment: ${d.pendingClients}"))
-            if (api.can("referrals")) ListRow(listOf("New referrals: ${d.newReferrals}"), onClick = { nav.navigate("referrals") })
-            if (api.can("billing")) ListRow(listOf("Unbilled: ${hoursText(d.unbilledHours)} hours, $" + String.format(Locale.US, "%,.2f", d.unbilledAmount)))
+            // 4.36.0: the client counts only with the clients permission, as the website.
+            atAGlanceRows(d, api.can("clients"), api.can("referrals"), api.can("billing"),
+                "${hoursText(d.unbilledHours)} hours, $" + String.format(Locale.US, "%,.2f", d.unbilledAmount)).forEach { (text, route) ->
+                ListRow(listOf(text), onClick = route?.let { rt -> { nav.navigate(rt) } })
+            }
+            // 4.36.0: My tasks, as the website's: the first open ones, then the whole list.
+            d.tasks?.takeIf { dashboardTasksShown(it) }?.let { t ->
+                Heading(t.heading)
+                t.items.forEach { x -> ListRow(listOf(x.line), action = "open the task list", onClick = { nav.navigate("taskList") }) }
+                ListRow(listOf("Open the task list"), onClick = { nav.navigate("taskList") })
+            }
 
             deadlines.data?.takeIf { it.worthShowing }?.let { rd ->
                 Heading("Referral deadlines, last 90 days")
@@ -59,7 +88,9 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
             if (d.expiring.isNotEmpty()) {
                 Heading("Authorizations ending soon (${d.expiringTotal})")
                 d.expiring.forEach { t ->
-                    ListRow(listOf(t.client, t.title, (if (t.expired) "Ended " else "Ends ") + dayText(t.expirationDate)))
+                    // 4.36.0: each opens the client, as the website's row links them.
+                    ListRow(listOf(t.client, t.title, (if (t.expired) "Ended " else "Ends ") + dayText(t.expirationDate)),
+                        action = "open the client", onClick = if (t.clientId > 0 && api.can("clients")) ({ nav.navigate("client/${t.clientId}") }) else null)
                 }
             }
             if (d.recentReferrals.isNotEmpty() && api.can("referrals")) {

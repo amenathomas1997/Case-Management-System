@@ -15,6 +15,119 @@ private struct AccountSummary: Decodable {
     let canSchedule: Bool
     let passkeys: [AccountPasskey]
     let appSessions: Int
+    /// 4.36.0 (nil from an older server, which hides the mobile and alert sections): the mobile
+    /// number urgent alerts are texted to, whether they are, whether texting is set up at all,
+    /// and how alerts are emailed ("now", "daily" or "off") with the website's choices.
+    let mobile: String?
+    let alertSms: Bool?
+    let smsEnabled: Bool?
+    let alertEmail: String?
+    let alertEmailChoices: [AlertEmailChoice]?
+    /// 4.36.0: the calendar sync and online-meeting connections, as the website's sentences
+    /// (nil calendar: no calendar section on this server; nil meetings: an older server).
+    let calendar: AccountCalendarStatus?
+    let meetings: [AccountMeetingStatus]?
+    private enum CodingKeys: String, CodingKey {
+        case name, email, role, group, totpEnabled, hasCalFeed, canSchedule, passkeys, appSessions
+        case mobile, alertSms, smsEnabled, alertEmail, alertEmailChoices, calendar, meetings
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        email = try c.decode(String.self, forKey: .email)
+        role = try c.decode(String.self, forKey: .role)
+        group = try c.decodeIfPresent(String.self, forKey: .group)
+        totpEnabled = try c.decode(Bool.self, forKey: .totpEnabled)
+        hasCalFeed = try c.decode(Bool.self, forKey: .hasCalFeed)
+        canSchedule = try c.decode(Bool.self, forKey: .canSchedule)
+        passkeys = try c.decode([AccountPasskey].self, forKey: .passkeys)
+        appSessions = try c.decode(Int.self, forKey: .appSessions)
+        // The 4.36.0 parts are tolerant: an odd value hides its section, never the whole screen.
+        mobile = (try? c.decodeIfPresent(String.self, forKey: .mobile)) ?? nil
+        alertSms = (try? c.decodeIfPresent(Bool.self, forKey: .alertSms)) ?? nil
+        smsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .smsEnabled)) ?? nil
+        alertEmail = (try? c.decodeIfPresent(String.self, forKey: .alertEmail)) ?? nil
+        alertEmailChoices = (try? c.decodeIfPresent([AlertEmailChoice].self, forKey: .alertEmailChoices)) ?? nil
+        calendar = (try? c.decodeIfPresent(AccountCalendarStatus.self, forKey: .calendar)) ?? nil
+        meetings = (try? c.decodeIfPresent([AccountMeetingStatus].self, forKey: .meetings)) ?? nil
+    }
+}
+
+/// One of the website's "Email me about alerts" choices (account.php's select).
+private struct AlertEmailChoice: Decodable, Hashable {
+    let value: String
+    let label: String
+}
+
+/// The calendar sync status sentence (account.php's My calendar), read-only in the app.
+private struct AccountCalendarStatus: Decodable {
+    let text: String
+    let error: String?
+}
+
+/// One online-meeting provider's status sentence (account.php's Online meetings).
+private struct AccountMeetingStatus: Decodable {
+    let provider: String
+    let state: String
+    let text: String
+}
+
+/// A phone signed in to the app (app_devices, 4.36.0), with the website's line about it.
+private struct AppDevice: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let text: String
+    let thisPhone: Bool
+    let canSignOut: Bool
+    let canReportLost: Bool
+    private enum CodingKeys: String, CodingKey { case id, name, text, thisPhone, canSignOut, canReportLost }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? "Phone"
+        text = (try? c.decode(String.self, forKey: .text)) ?? ""
+        thisPhone = (try? c.decode(Bool.self, forKey: .thisPhone)) ?? false
+        // Never offered on the phone in use (it signs out with Sign out), whatever the reply says.
+        canSignOut = !thisPhone && ((try? c.decode(Bool.self, forKey: .canSignOut)) ?? false)
+        canReportLost = !thisPhone && ((try? c.decode(Bool.self, forKey: .canReportLost)) ?? false)
+    }
+}
+
+private struct AppDevicesReply: Decodable {
+    let intro: String
+    let devices: [AppDevice]
+}
+
+private struct DeviceActionReply: Decodable {
+    let lost: Bool?
+    let message: String
+    let devices: [AppDevice]?
+}
+
+private struct AlertSettingsReply: Decodable {
+    let message: String
+}
+
+/// The person's own booking hours (availability, 4.36.0), as My availability on the website.
+private struct AvailabilityBlock: Decodable, Identifiable {
+    let id: Int
+    let text: String
+}
+
+private struct AvailabilityDay: Decodable, Hashable {
+    let value: String
+    let label: String
+}
+
+private struct AvailabilityReply: Decodable {
+    let intro: String
+    let hours: [AvailabilityBlock]
+    let days: [AvailabilityDay]?
+}
+
+private struct AvailabilityChange: Decodable {
+    let message: String
+    let hours: [AvailabilityBlock]?
 }
 
 private struct AccountPasskey: Decodable, Identifiable {
@@ -144,6 +257,27 @@ struct AccountView: View {
     @State private var confirmingSignOut = false
     @State private var everywherePassword = ""
     @State private var confirmingEverywhere = false
+    // Phones signed in to the app (4.36.0); nil intro: not offered by this server.
+    @State private var deviceIntro: String?
+    @State private var deviceList: [AppDevice] = []
+    @State private var signingOutDevice: AppDevice?
+    @State private var reportingLost: AppDevice?
+    @State private var deviceMessage: String?
+    @State private var lostDeviceName: String?
+    @State private var deviceIdem = IdemKey()
+    @State private var privacyPrefill: PrivacyIncidentPrefill?
+    @State private var privacyResult: String?
+    /// The lost report's message, said once its sheet has closed.
+    @State private var lostResult: String?
+    // Mobile number and alert emails (4.36.0)
+    @State private var mobileText = ""
+    @State private var alertSmsOn = false
+    @State private var alertEmailChoice = "now"
+    /// The fields are filled from the server once; a reload never replaces what is being typed.
+    @State private var alertFieldsSeeded = false
+    /// Each part's saved message, shown under it as well as announced.
+    @State private var mobileMessage: String?
+    @State private var alertEmailMessage: String?
 
     init() {}
 
@@ -153,11 +287,18 @@ struct AccountView: View {
     var body: some View {
         ErrorFocusForm(inNavigationStack: true, error: error) {
             if let summary {
+                // 4.36.0: in the order of My Account on the website (account.php, top to bottom),
+                // then this iPhone's own settings.
                 accountSection(summary)
                 passwordSection(summary)
                 twoStepSection(summary)
-                passkeySection(summary)
+                mobileSection(summary)
+                alertEmailSection(summary)
                 if summary.canSchedule { calendarSection(summary) }
+                connectionsSection(summary)
+                availabilitySection
+                phonesSection(summary)
+                passkeySection(summary)
             } else if error == nil {
                 ProgressView("Loading your account…")
             }
@@ -171,6 +312,36 @@ struct AccountView: View {
         .refreshable { await load() }
         .sheet(item: $webPage) { page in
             AccountWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
+        }
+        .sheet(item: $privacyPrefill, onDismiss: {
+            if let privacyResult { announceAfterDismiss(privacyResult) }
+        }) { prefill in
+            PrivacyIncidentSheet(prefill: prefill) { message in
+                privacyResult = message
+                deviceMessage = message
+                lostDeviceName = nil
+            }
+        }
+        .confirmationDialog(signingOutDevice.map { "Sign \($0.name) out of the app?" } ?? "Sign this phone out of the app?",
+                            isPresented: Binding(get: { signingOutDevice != nil }, set: { if !$0 { signingOutDevice = nil } }),
+                            titleVisibility: .visible, presenting: signingOutDevice) { device in
+            Button("Sign it out", role: .destructive) { Task { await deviceAction(device, lost: false) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Whoever uses it has to sign in again. Entries not yet sent from it stay on it.")
+        }
+        // Reporting a phone lost asks for the account password (4.36.0 security rule), so it is a
+        // sheet with the field, not a plain confirmation; signing one out asks nothing more.
+        .sheet(item: $reportingLost, onDismiss: {
+            if let message = lostResult { announceAfterDismiss(message) }
+            lostResult = nil
+        }) { device in
+            ReportLostSheet(device: device) { reply in
+                if let list = reply.devices { deviceList = list } else { Task { await loadDevices() } }
+                deviceMessage = reply.message
+                lostDeviceName = device.name
+                lostResult = reply.message
+            }
         }
         .sheet(isPresented: $changingPassword) {
             ChangePasswordSheet(passkeyCount: summary?.passkeys.count ?? 0, hasCalFeed: summary?.hasCalFeed ?? false) { message in
@@ -217,6 +388,115 @@ struct AccountView: View {
             LabeledContent("Email", value: s.email)
             LabeledContent("Role", value: roleText(s))
         } header: { sectionHeader("Your account") }
+    }
+
+    /// 4.36.0: the person's own booking hours, as My availability on the website.
+    private var availabilitySection: some View {
+        Section {
+            NavigationLink { AvailabilityView() } label: { Text("My availability") }
+        } header: { sectionHeader("My availability") }
+    }
+
+    /// "Your mobile number" (4.36.0), as account.php: the number urgent alerts are texted to.
+    /// Hidden on an older server, whose account reply does not say it.
+    @ViewBuilder private func mobileSection(_ s: AccountSummary) -> some View {
+        if s.alertEmail != nil || s.smsEnabled != nil {
+            Section {
+                CaptionedField(label: "Mobile number (optional; for urgent alerts by text and test texts)", text: $mobileText,
+                               keyboard: .phonePad, errorName: "Mobile number")
+                    .textContentType(.telephoneNumber)
+                if s.smsEnabled == true {
+                    Toggle("Text me when an urgent alert comes in (at most one text every 15 minutes, never with client details)", isOn: $alertSmsOn)
+                }
+                Button { Task { await saveAlertSettings(["mobile": mobileText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                         "alert_sms": s.smsEnabled == true && alertSmsOn]) } } label: {
+                    Text("Save mobile number").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .disabled(busy)
+                if let mobileMessage { Text(mobileMessage) }
+            } header: { sectionHeader("Your mobile number") }
+        }
+    }
+
+    /// "How alerts reach you" (4.36.0): the website's three alert-email choices, a quiet picker.
+    @ViewBuilder private func alertEmailSection(_ s: AccountSummary) -> some View {
+        if s.alertEmail != nil {
+            Section {
+                Picker("Email me about alerts", selection: $alertEmailChoice) {
+                    ForEach(Array(alertEmailChoices(s).enumerated()), id: \.offset) { _, choice in Text(choice.label).tag(choice.value) }
+                }
+                .errorField("Email me about alerts")
+                Button { Task { await saveAlertSettings(["alert_email": alertEmailChoice]) } } label: {
+                    Text("Save alert emails").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .disabled(busy)
+                if let alertEmailMessage { Text(alertEmailMessage) }
+            } header: { sectionHeader("How alerts reach you") }
+        }
+    }
+
+    /// The server's choices, or the website's three when it sends none.
+    private func alertEmailChoices(_ s: AccountSummary) -> [(value: String, label: String)] {
+        if let list = s.alertEmailChoices, !list.isEmpty { return list.map { ($0.value, $0.label) } }
+        return [("now", "Urgent ones at once, and daily"), ("daily", "Once a day"), ("off", "Never")]
+    }
+
+    /// "Calendar and online meetings" (4.36.0): the website's status sentences, read-only, so a
+    /// sync problem shows here too. Connecting or changing them is on the website.
+    @ViewBuilder private func connectionsSection(_ s: AccountSummary) -> some View {
+        // As account.php: online meetings first, then the calendar.
+        let rows = (s.meetings ?? []).map(\.text) + (s.calendar.map { [$0.text] } ?? [])
+        if !rows.filter({ !$0.isEmpty }).isEmpty {
+            Section {
+                ForEach(Array(rows.filter { !$0.isEmpty }.enumerated()), id: \.offset) { _, text in Text(text) }
+                webLink("Change on the website", path: s.calendar != nil ? "account.php#calendar-h" : "account.php#meetings-h",
+                        icon: "safari", hint: nil)
+            } header: { sectionHeader("Calendar and online meetings") }
+        }
+    }
+
+    /// "Phones signed in to the app" (4.36.0), as My Account on the website: sign one out, or
+    /// report it lost so it wipes itself the next time it connects. Hidden on an older server.
+    @ViewBuilder private func phonesSection(_ s: AccountSummary) -> some View {
+        if deviceIntro == nil {
+            // An older server without app_devices: the count, as Android shows it.
+            Section {
+                Text("Phones signed in to the app: \(s.appSessions)")
+            } header: { sectionHeader("Phones signed in to the app") }
+        }
+        if let deviceIntro {
+            Section {
+                Text(deviceIntro)
+                if deviceList.isEmpty {
+                    Text("Not signed in to the mobile app on any phone.")
+                }
+                ForEach(deviceList) { device in
+                    // The phone's line is one stop; its buttons are rows (stops) of their own.
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(device.text)
+                        if device.thisPhone { Text("This phone").font(.caption.weight(.semibold)) }
+                    }
+                    .accessibilityElement(children: .combine)
+                    if device.canSignOut {
+                        Button("Sign out \(device.name)") { signingOutDevice = device }
+                            .disabled(busy)
+                    }
+                    if device.canReportLost {
+                        Button("Report lost and wipe \(device.name)", role: .destructive) { reportingLost = device }
+                            .disabled(busy)
+                    }
+                }
+                if let deviceMessage {
+                    Text(deviceMessage)
+                }
+                if let lostDeviceName, api.can("clients") {
+                    Button("Report a privacy incident for \(lostDeviceName)") {
+                        privacyResult = nil
+                        privacyPrefill = PrivacyIncidentPrefill(kind: "Lost or stolen device", what: "\(lostDeviceName) was lost or stolen.")
+                    }
+                }
+            } header: { sectionHeader("Phones signed in to the app") }
+        }
     }
 
     private func roleText(_ s: AccountSummary) -> String {
@@ -502,13 +782,14 @@ struct AccountView: View {
     }
 
     /// A website page opened inside the app, announced as a link.
-    private func webLink(_ title: String, path: String, icon: String, hint: String) -> some View {
+    /// A nil hint adds none (4.36.0's sections: the label says it all).
+    private func webLink(_ title: String, path: String, icon: String, hint: String?) -> some View {
         Button { webPage = AccountWebPage(url: siteURL(path)) } label: {
             Label(title, systemImage: icon).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
         .accessibilityRemoveTraits(.isButton)
         .accessibilityAddTraits(.isLink)
-        .accessibilityHint(hint)
+        .accessibilityHint(hint ?? "")
     }
 
     // MARK: Actions
@@ -520,6 +801,13 @@ struct AccountView: View {
             error = nil
             if !s.hasCalFeed { calAddress = nil }
             if s.totpEnabled { setup = nil }
+            if !alertFieldsSeeded {
+                alertFieldsSeeded = true
+                mobileText = s.mobile ?? ""
+                alertSmsOn = s.alertSms ?? false
+                alertEmailChoice = s.alertEmail ?? "now"
+            }
+            await loadDevices()
         } catch APIError.server(let message) where message == "Unknown action." {
             showFormError("This server does not offer account settings in the app yet. Use My Account on the website.", in: &error)
         } catch {
@@ -657,6 +945,82 @@ struct AccountView: View {
         }
     }
 
+    /// The phones list; a server without app_devices (or any failure) hides the section, and
+    /// Sign out everywhere keeps its count.
+    private func loadDevices() async {
+        do {
+            let r: AppDevicesReply = try await api.call("app_devices")
+            deviceIntro = r.intro
+            deviceList = r.devices
+        } catch {
+            deviceIntro = nil
+            deviceList = []
+        }
+    }
+
+    /// Sign one phone out, or report it lost (it wipes itself the next time it connects). No
+    /// password, as on the website; the server allows only this person's own phones.
+    private func deviceAction(_ device: AppDevice, lost: Bool) async {
+        signingOutDevice = nil
+        reportingLost = nil
+        guard !busy else { return }
+        busy = true
+        error = nil
+        deviceMessage = nil
+        lostDeviceName = nil
+        defer { busy = false }
+        var body: [String: Any] = ["device_id": device.id, "lost": lost]
+        body["idem_key"] = deviceIdem.key(for: body)
+        do {
+            let r: DeviceActionReply = try await api.call("device_action", method: "POST", body: body)
+            deviceIdem.answered()
+            if let list = r.devices { deviceList = list } else { await loadDevices() }
+            deviceMessage = r.message
+            if r.lost ?? lost { lostDeviceName = device.name }
+            announce(r.message)
+        } catch {
+            deviceIdem.failed(error)
+            // Already signed out, reported, or the phone in use: said in the banner, and the
+            // list is brought up to date.
+            showFormError(error.localizedDescription, in: &self.error)
+            await loadDevices()
+        }
+    }
+
+    /// save_alert_settings with only the part being saved (the mobile number and its texts, or
+    /// the alert emails). A refusal is tied to its field.
+    private func saveAlertSettings(_ body: [String: Any]) async {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        if body["mobile"] != nil { mobileMessage = nil } else { alertEmailMessage = nil }
+        defer { busy = false }
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: AlertSettingsReply = try await api.call("save_alert_settings", method: "POST", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            // Only the part saved is put back to what the server now holds (the number as it
+            // was normalised); the other part keeps what is being typed.
+            if let s: AccountSummary = try? await api.call("account") {
+                summary = s
+                if body["mobile"] != nil {
+                    mobileText = s.mobile ?? ""
+                    alertSmsOn = s.alertSms ?? false
+                }
+                if body["alert_email"] != nil { alertEmailChoice = s.alertEmail ?? alertEmailChoice }
+            }
+            if body["mobile"] != nil { mobileMessage = r.message } else { alertEmailMessage = r.message }
+            announce(r.message)
+        } catch APIError.server(let message) {
+            let field = refusedFields["mobile"] != nil ? "Mobile number"
+                : refusedFields["alert_email"] != nil ? "Email me about alerts" : nil
+            showFormError(message, in: &self.error, field: field)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+
     private func logoutAll() async {
         await perform {
             let result: AccountMessage = try await api.call("logout_all", body: ["password": everywherePassword])
@@ -772,6 +1136,240 @@ private struct ChangePasswordSheet: View {
         } catch {
             busy = false
             showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+}
+
+// MARK: - My availability (4.36.0)
+
+/// The hours this person takes sessions, as My availability on the website (their own hours
+/// only; self-booking rules and anyone else's hours stay on the website).
+struct AvailabilityView: View {
+    @EnvironmentObject var api: API
+    @State private var intro: String?
+    @State private var hours: [AvailabilityBlock] = []
+    @State private var days: [AvailabilityDay] = []
+    @State private var error: String?
+    @State private var busy = false
+    @State private var weekday = "1"
+    @State private var from = AvailabilityView.time(9)
+    @State private var to = AvailabilityView.time(12)
+    @State private var mode = "online"
+    @State private var location = ""
+    @State private var idem = IdemKey()
+    @State private var removing: AvailabilityBlock?
+    /// The last add or remove's message, shown as well as announced (as Android's notice).
+    @State private var result: String?
+
+    /// Today at that hour, for the From and To pickers' starting values (as the website's 09:00 and 12:00).
+    private static func time(_ hour: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: Date()) ?? Date()
+    }
+
+    /// The server's days, Monday first, or the website's when it sends none.
+    private var dayChoices: [(value: String, label: String)] {
+        if !days.isEmpty { return days.map { ($0.value, $0.label) } }
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            .enumerated().map { (String($0.offset + 1), $0.element) }
+    }
+
+    var body: some View {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
+            if let intro {
+                Section { Text(intro) }
+                if let result { Section { Text(result) } }
+                Section {
+                    if hours.isEmpty { Text("None yet.") }
+                    ForEach(hours) { block in
+                        Text(block.text)
+                        Button("Remove \(block.text)", role: .destructive) { removing = block }
+                            .disabled(busy)
+                    }
+                } header: { availabilityHeader("Hours (\(hours.count))") }
+                Section {
+                    Picker("Day", selection: $weekday) {
+                        ForEach(Array(dayChoices.enumerated()), id: \.offset) { _, day in Text(day.label).tag(day.value) }
+                    }
+                    .errorField("Day")
+                    DatePicker("From", selection: $from, displayedComponents: .hourAndMinute)
+                        .errorField("From")
+                    DatePicker("To", selection: $to, displayedComponents: .hourAndMinute)
+                        .errorField("To")
+                    Picker("How", selection: $mode) {
+                        Text("Online").tag("online")
+                        Text("In person").tag("in_person")
+                    }
+                    if mode == "in_person" {
+                        CaptionedField(label: "Where, for in person (required)", text: $location, errorName: "Where")
+                    }
+                    Button { Task { await add() } } label: {
+                        Text(busy ? "Adding…" : "Add these hours").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .disabled(busy)
+                    .accessibilityLabel("Add these hours")
+                } header: { availabilityHeader("Add hours") }
+            } else if error == nil {
+                ProgressView("Loading your hours…")
+            }
+        }
+        .navigationTitle("My availability")
+        .task { await load() }
+        .refreshable { await load() }
+        .confirmationDialog(removing.map { "Remove \($0.text)?" } ?? "Remove these hours?",
+                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { block in
+            Button("Remove", role: .destructive) { Task { await remove(block) } }
+            Button("Keep them", role: .cancel) {}
+        } message: { _ in
+            Text("Sessions already booked in them stay booked.")
+        }
+    }
+
+    private func availabilityHeader(_ title: String) -> some View {
+        Text(title).font(.headline).foregroundStyle(.primary).textCase(nil)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func load() async {
+        do {
+            let r: AvailabilityReply = try await api.call("availability")
+            intro = r.intro
+            hours = r.hours
+            days = r.days ?? []
+            error = nil
+        } catch APIError.server(let message) where message == "Unknown action." {
+            showFormError("This server does not offer My availability in the app yet. Use My availability on the website.", in: &error)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+
+    private func hhmm(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: date)
+    }
+
+    private func add() async {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        result = nil
+        defer { busy = false }
+        let inPerson = mode == "in_person"
+        var body: [String: Any] = ["weekday": weekday, "from": hhmm(from), "to": hhmm(to), "mode": mode,
+                                   "location": inPerson ? location.trimmingCharacters(in: .whitespacesAndNewlines) : ""]
+        body["idem_key"] = idem.key(for: body)
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: AvailabilityChange = try await api.call("add_availability", method: "POST", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            if let list = r.hours { hours = list } else { await load() }
+            location = ""
+            result = r.message
+            announce(r.message)
+        } catch APIError.server(let message) {
+            idem.answered()
+            let names = ["weekday": "Day", "from": "From", "to": "To", "location": "Where"]
+            showFormError(message, in: &self.error, field: refusedFields.keys.compactMap { names[$0] }.first)
+        } catch {
+            idem.failed(error)
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+
+    private func remove(_ block: AvailabilityBlock) async {
+        removing = nil
+        guard !busy else { return }
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            let r: AvailabilityChange = try await api.call("remove_availability", method: "POST", body: ["id": block.id])
+            if let list = r.hours { hours = list } else { await load() }
+            result = r.message
+            announce(r.message)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+            await load()
+        }
+    }
+}
+
+// MARK: - Report a phone lost (4.36.0)
+
+/// "Report <name> lost?" with the website's words and, as the server requires from the app, the
+/// account password. The phone wipes itself the next time it connects.
+private struct ReportLostSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let device: AppDevice
+    let onReported: (DeviceActionReply) -> Void
+    @State private var password = ""
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section {
+                    Text("The next time it connects, the app removes its drafts, its unsent offline entries and its saved lists, and signs out. Entries not yet sent are lost.")
+                    SecureCaptionedField(label: "Your password (required)", text: $password, content: .password)
+                        .errorField("Your password")
+                } header: {
+                    Text("Report \(device.name) lost?").font(.headline).foregroundStyle(.primary).textCase(nil)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                Section {
+                    Button(role: .destructive) { Task { await report() } } label: {
+                        Text(busy ? "Reporting…" : "Report lost and wipe").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .disabled(busy)
+                    .accessibilityLabel("Report lost and wipe")
+                    Button("Cancel") { dismiss() }
+                        .disabled(busy)
+                }
+            }
+            .navigationTitle("Report lost and wipe")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(busy)
+        }
+    }
+
+    private func report() async {
+        guard !password.isEmpty else {
+            showFormError("Enter your password to confirm this change. Nothing was changed.", in: &error, field: "Your password")
+            return
+        }
+        busy = true
+        error = nil
+        defer { busy = false }
+        // The retry key is made without the password, so no copy of it is kept with the key.
+        var body: [String: Any] = ["device_id": device.id, "lost": true]
+        body["idem_key"] = idem.key(for: body)
+        body["password"] = password
+        // Never kept on screen after it is sent: a retry asks for it again.
+        password = ""
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: DeviceActionReply = try await api.call("device_action", method: "POST", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            onReported(r)
+            dismiss()
+        } catch APIError.server(let message) {
+            idem.answered()
+            // The server's own words, on the password field when they are about it.
+            let text = refusedFields["password"] ?? message
+            showFormError(text, in: &self.error, field: refusedFields["password"] != nil ? "Your password" : nil)
+        } catch {
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error), in: &self.error)
         }
     }
 }

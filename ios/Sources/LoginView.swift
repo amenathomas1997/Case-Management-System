@@ -56,6 +56,9 @@ struct LoginView: View {
         }
         var total: Int { entries + drafts + prepared }
     }
+    /// Whether the website offers Sign in with Microsoft (sign_in_options, 4.36.0): such a person
+    /// may have no password here, so the sign-in step says how to get one. False when unknown.
+    @State private var microsoftOnWebsite = false
     // Keyboard and VoiceOver focus for the code field, so the step change isn't silent.
     @FocusState private var codeFieldFocused: Bool
     @AccessibilityFocusState private var codeFieldVoiceOverFocused: Bool
@@ -167,6 +170,12 @@ struct LoginView: View {
                                 .contentShape(Rectangle())
                         }
                         .accessibilityHint("Opens the website in Safari.")
+                        if microsoftOnWebsite {
+                            Text("Signed in with Microsoft on the website? Set a password with Forgot your password first.")
+                                .font(.callout)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         // How the server signed in to here handles personal information, readable
                         // before signing in.
                         Link(destination: URL(string: "privacy.php", relativeTo: API.base)!.absoluteURL) {
@@ -271,6 +280,18 @@ struct LoginView: View {
                      + "To keep \(change.total == 1 ? "it" : "them"), cancel and sign in to \(change.from) instead.")
             }
         }
+        .task(id: awaitingCode) {
+            guard !awaitingCode else { return }
+            await loadSignInOptions()
+        }
+        // A build that asks for the server: asked again once a valid address is typed (as Android),
+        // after a pause in typing.
+        .task(id: serverAddress) {
+            guard asksForServer, !awaitingCode else { return }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await loadSignInOptions()
+        }
         .task {
             // An expired session swapped the whole app for this screen (or put this one above
             // it): say why, once, a beat after the switch so VoiceOver doesn't drop it while the
@@ -284,6 +305,30 @@ struct LoginView: View {
             try? await Task.sleep(nanoseconds: 800_000_000)
             if api.sessionNotice == notice { announce(notice) }
         }
+    }
+
+    /// sign_in_options needs no account: whether the website has Sign in with Microsoft. Any
+    /// failure (an older server, no signal, no server chosen yet) leaves the line hidden.
+    /// Sent with no account (no token goes to a server only typed so far), to the typed server
+    /// in a build that asks for one, else to the app's server.
+    private func loadSignInOptions() async {
+        struct SignInOptions: Decodable { let ok: Bool; let microsoft: Bool }
+        let target = asksForServer ? API.apiURL(fromAddress: serverAddress) : API.base
+        guard let target, var parts = URLComponents(url: target, resolvingAgainstBaseURL: false) else {
+            microsoftOnWebsite = false
+            return
+        }
+        parts.queryItems = [URLQueryItem(name: "action", value: "sign_in_options")]
+        guard let url = parts.url else { microsoftOnWebsite = false; return }
+        var request = URLRequest(url: url)
+        API.identifyApp(&request)
+        request.timeoutInterval = 15
+        let typed = serverAddress
+        let data = try? await API.session.data(for: request).0
+        // A late reply for an address since changed is dropped.
+        guard !asksForServer || typed == serverAddress else { return }
+        let options = data.flatMap { try? JSONDecoder().decode(SignInOptions.self, from: $0) }
+        microsoftOnWebsite = options?.ok == true && options?.microsoft == true
     }
 
     private func apply(_ step: LoginStep) {

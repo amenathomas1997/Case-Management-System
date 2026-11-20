@@ -402,6 +402,66 @@ const PRIVACY_INCIDENT_STATUSES = ['Open', 'Closed'];
 /** Days from discovery to the notice deadline (HIPAA: without unreasonable delay, at most 60 days). */
 const PRIVACY_NOTICE_DAYS = 60;
 
+/** The clients a privacy incident can be tied to: any not archived, a caseload-scoped user only their own. */
+function privacy_incident_client_choices(array $user): array {
+    $cq = db()->prepare('SELECT id, name FROM clients WHERE archived_at IS NULL' . (caseload_scoped() ? ' AND assigned_to = ?' : '') . ' ORDER BY name');
+    $cq->execute(caseload_scoped() ? [(int)$user['id']] : []);
+    return $cq->fetchAll();
+}
+
+/** "Privacy incident reported. …" with the notice deadline (privacy_incidents.php and the apps). */
+function privacy_incident_reported_message(string $deadline): string {
+    return 'Privacy incident reported. An administrator has been told. The notice deadline is ' . fmt_date($deadline) . '.';
+}
+
+/**
+ * Report a privacy incident (4.36.0: moved from privacy_incidents.php, shared with the apps).
+ * $in holds the form's fields (kind, discovered_on, occurred_on, description, info_involved,
+ * client_id). Checked, saved with the affected client in one transaction, audited
+ * (privacy_incident.add, the kind, plus " (mobile)" from the apps) and every administrator told.
+ * Returns ['errors' => [field => message]] or ['id', 'deadline' (Y-m-d), 'message'].
+ */
+function privacy_incident_report(array $in, array $user, string $channel): array {
+    $str = fn(string $k): string => trim(is_string($in[$k] ?? null) ? $in[$k] : (is_int($in[$k] ?? null) ? (string)$in[$k] : ''));
+    $errs = [];
+    $kind = $str('kind');
+    if (!in_array($kind, PRIVACY_INCIDENT_KINDS, true)) $errs['kind'] = 'Choose what kind of incident it is.';
+    $disc = valid_date($str('discovered_on'), 2000, (int)date('Y'));
+    if ($disc === null || $disc > date('Y-m-d')) $errs['discovered_on'] = 'Enter the date it was discovered (today or earlier).';
+    $occ = $str('occurred_on') === '' ? null : valid_date($str('occurred_on'), 2000, (int)date('Y'));
+    if ($str('occurred_on') !== '' && ($occ === null || $occ > date('Y-m-d'))) $errs['occurred_on'] = 'Enter the date it happened (today or earlier), or leave it blank.';
+    $desc = $str('description');
+    if ($desc === '') $errs['description'] = 'Describe what happened.';
+    elseif (mb_strlen($desc) > 5000) $errs['description'] = 'What happened is too long (5,000 characters maximum).';
+    $info = $str('info_involved');
+    if (mb_strlen($info) > 500) $errs['info_involved'] = 'Keep the information involved to 500 characters or fewer.';
+    $cid = (int)$str('client_id');
+    $client = null;
+    if ($cid) {
+        $c = db()->prepare('SELECT id, name, assigned_to FROM clients WHERE id = ?');
+        $c->execute([$cid]);
+        $client = $c->fetch() ?: null;
+        if (!$client || (caseload_scoped() && (int)$client['assigned_to'] !== (int)$user['id'])) $errs['client_id'] = 'Choose a client on your caseload, or None.';
+    }
+    if ($errs) return ['errors' => $errs];
+    $deadline = date('Y-m-d', strtotime($disc . ' +' . PRIVACY_NOTICE_DAYS . ' days'));
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO privacy_incidents (kind, occurred_on, discovered_on, notice_deadline, description, info_involved, reported_by) VALUES (?,?,?,?,?,?,?)')
+            ->execute([$kind, $occ, $disc, $deadline, $desc, $info !== '' ? $info : null, $user['id']]);
+        $newId = (int)$pdo->lastInsertId();
+        if ($client) $pdo->prepare('INSERT INTO privacy_incident_clients (incident_id, client_id, client_label) VALUES (?,?,?)')->execute([$newId, $client['id'], $client['name']]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    audit((int)$user['id'], 'privacy_incident.add', 'privacy_incident', $newId, $kind . ($channel === 'mobile' ? ' (mobile)' : ''));
+    notify_admin_users('Privacy incident reported: ' . $kind, 'privacy_incidents.php?id=' . $newId);
+    return ['id' => $newId, 'deadline' => $deadline, 'message' => privacy_incident_reported_message($deadline)];
+}
+
 /** One privacy incident with its reporter, or null. */
 function privacy_incident(int $id): ?array {
     $q = db()->prepare('SELECT p.*, u.name AS reporter FROM privacy_incidents p LEFT JOIN users u ON u.id = p.reported_by WHERE p.id = ?');
@@ -537,7 +597,7 @@ function app_device_state(array $d): string {
 }
 
 /** Sign one phone out ($lost false), or report it lost so it wipes itself ($lost true). */
-function app_device_action(int $tokenId, int $userId, bool $lost, int $actor): bool {
+function app_device_action(int $tokenId, int $userId, bool $lost, int $actor, string $via = ''): bool {
     if ($lost) {
         // An expired session can be flagged too (4.27.0): the row is kept, and the phone
         // gets the wipe whenever it next connects (api.php finds wipe-pending rows past expiry).
@@ -548,8 +608,33 @@ function app_device_action(int $tokenId, int $userId, bool $lost, int $actor): b
         $u->execute([$tokenId, $userId]);
     }
     if ($u->rowCount() !== 1) return false;
-    audit($actor, $lost ? 'user.device_lost' : 'user.device_signout', 'user', $userId, 'app session #' . $tokenId);
+    audit($actor, $lost ? 'user.device_lost' : 'user.device_signout', 'user', $userId, 'app session #' . $tokenId . $via);
     return true;
+}
+
+/** A phone's name as the list shows it. */
+function app_device_name(array $d): string {
+    return (string)($d['device_name'] ?: 'A phone');
+}
+
+/** One phone in words, as the list reads it (4.36.0, shared with the apps): "<name>: signed in <date>. <state>." */
+function app_device_line(array $d): string {
+    return app_device_name($d) . ': signed in ' . fmt_date($d['created_at']) . '. ' . app_device_state($d) . '.';
+}
+
+/** Which buttons a phone has (4.36.0, shared with the apps): Sign out only while its session is
+ *  live, Report lost and wipe until it is flagged; neither once reported lost or told to wipe. */
+function app_device_buttons(array $d): array {
+    $flagged = !empty($d['wipe_requested_at']) || !empty($d['wiped_at']);
+    $live = !isset($d['live']) || (int)$d['live'] === 1;
+    return ['sign_out' => !$flagged && $live, 'report_lost' => !$flagged];
+}
+
+/** What the person is told after Sign out or Report lost and wipe (account.php and the apps). */
+function app_device_action_message(bool $ok, bool $lost): string {
+    if (!$ok) return 'That phone was already signed out or reported lost.';
+    return $lost ? 'Reported lost. The next time that phone connects, the app removes everything it keeps and signs out. Change your password too if someone may know it.'
+        : 'That phone is signed out of the app.';
 }
 
 /** The devices list and its buttons, for users.php (an administrator) and account.php (oneself). */
@@ -559,13 +644,13 @@ function app_devices_html(array $devices, string $action, array $hidden): string
     foreach ($hidden as $k => $v) $fields .= '<input type="hidden" name="' . h($k) . '" value="' . h((string)$v) . '">';
     $out = '<ul>';
     foreach ($devices as $d) {
-        $name = $d['device_name'] ?: 'A phone';
-        $out .= '<li><strong>' . h($name) . '</strong>: signed in ' . fmt_date($d['created_at']) . '. ' . h(app_device_state($d)) . '.';
-        if (empty($d['wipe_requested_at']) && empty($d['wiped_at'])) {
-            $live = !isset($d['live']) || (int)$d['live'] === 1;
+        $name = app_device_name($d);
+        $out .= '<li><strong>' . h($name) . '</strong>' . h(substr(app_device_line($d), strlen($name)));
+        $buttons = app_device_buttons($d);
+        if ($buttons['report_lost']) {
             $out .= '<form method="post" action="' . h($action) . '" class="inline-form">' . csrf_field() . $fields
                 . '<input type="hidden" name="device_id" value="' . (int)$d['id'] . '">'
-                . ($live ? '<button type="submit" name="device_signout" value="1" class="btn btn-secondary btn-sm">Sign out<span class="visually-hidden"> ' . h($name) . '</span></button> ' : '')
+                . ($buttons['sign_out'] ? '<button type="submit" name="device_signout" value="1" class="btn btn-secondary btn-sm">Sign out<span class="visually-hidden"> ' . h($name) . '</span></button> ' : '')
                 . '<button type="submit" name="device_lost" value="1" class="btn btn-danger btn-sm" onclick="return confirm(' . h(json_encode('Report ' . $name . ' lost? The next time it connects, the app removes its drafts, its unsent offline entries and its saved lists, and signs out. Entries not yet sent are lost.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) . ');">Report lost and wipe<span class="visually-hidden"> ' . h($name) . '</span></button></form>';
         }
         $out .= '</li>';

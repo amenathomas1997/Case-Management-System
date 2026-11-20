@@ -40,8 +40,8 @@ fun TrainingListScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("training").optJSONArray("training").objects() }
     Show(state, "your training") { list ->
         Page {
-            val needed = list.count { it.optString("state") == "needed" }
-            Text(if (list.isEmpty()) "There is no training for you to take." else if (needed > 0) "$needed of ${list.size} to take." else "Every training is passed and current.")
+            // 4.36.0: every module not done counts, renewals too, as the website's.
+            Text(trainingCountText(list.map { it.optString("state") }))
             list.forEach { m ->
                 ListRow(listOf(m.optString("title"), if (m.optString("state") == "needed") "To take: " + m.optString("why").lowercase() else m.optString("why")),
                     action = "open it", onClick = { nav.navigate("trainingTake/${m.optInt("id")}") })
@@ -143,6 +143,7 @@ private fun CredentialDialog(api: Api, c: JSONObject, types: List<String>, onDon
     var issuer by rememberSaveable { mutableStateOf(c.str("issuer") ?: "") }
     var issued by rememberSaveable { mutableStateOf(c.str("issued_on") ?: "") }
     var expires by rememberSaveable { mutableStateOf(c.str("expires_on") ?: "") }
+    var notes by rememberSaveable { mutableStateOf(c.str("notes") ?: "") }
     var removing by rememberSaveable { mutableStateOf(false) }
     // 4.29.0: a new credential is added once even when a reply was lost (see sendOnce).
     var idem by rememberSaveable { mutableStateOf("") }
@@ -150,34 +151,30 @@ private fun CredentialDialog(api: Api, c: JSONObject, types: List<String>, onDon
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     FormDialog(if (existing) c.optString("name") else "Add a credential", "Save", busy, onSave = {
         if (busy) return@FormDialog
         val name = if (type == "Other") other.trim() else type
-        fieldErrors = listOfNotNull(
-            if (name.isEmpty()) "name" to "Name the credential." else null,
-            if (issued.isNotBlank() && !day.matches(issued.trim())) "issued_on" to "Enter the date issued as year-month-day, or leave it empty." else null,
-            if (expires.isNotBlank() && !day.matches(expires.trim())) "expires_on" to "Enter the expiry date as year-month-day, or leave it empty." else null,
-        ).toMap()
+        // 4.36.0: the website's checks and words, each on its own field.
+        fieldErrors = credentialLocalErrors(type, other, number, issuer, issued, expires, notes, today())
         if (fieldErrors.isNotEmpty()) { error = errorSummary(fieldErrors.values); return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
-            val b = JSONObject().put("id", c.optInt("id")).put("name", name).put("number", number.trim()).put("issuer", issuer.trim())
-                .put("issued_on", issued.trim()).put("expires_on", expires.trim())
+            val b = credentialBody(c.optInt("id"), type, other, number, issuer, issued, expires, notes)
             try {
                 if (existing) api.call("save_credential", body = b) else api.callOnce("save_credential", b, idem, { idem = it }, "the credential")
             } catch (e: ApiException) {
-                e.reply?.optJSONObject("errors")?.let { errs -> fieldErrors = errs.keys().asSequence().associateWith { errs.optString(it) } }
+                replyErrors(e.reply).mapNotNull { (k, v) -> credentialFieldFor(k)?.let { it to v } }.toMap().takeIf { it.isNotEmpty() }?.let { fieldErrors = it }
                 throw e
             }
             onDone("Saved $name.")
         }
     }, onCancel = onCancel) {
-        Choice("Credential", type, listOf("" to "Choose one") + types.map { it to it }, error = if (type != "Other") fieldErrors["name"] else null, required = true) { type = it }
-        if (type == "Other") Field("Its name", other, { other = it }, error = fieldErrors["name"], required = true)
+        Choice("Credential", type, listOf("" to "Choose one") + types.map { it to it }, error = fieldErrors["type"], required = true) { type = it }
+        if (type == "Other") Field("Its name", other, { other = it }, error = fieldErrors["other_name"], required = true)
         Field("Number", number, { number = it }, hint = "optional", error = fieldErrors["number"])
         Field("Issued by", issuer, { issuer = it }, hint = "optional", error = fieldErrors["issuer"])
         Field("Date issued", issued, { issued = it }, hint = "year-month-day, optional", keyboard = KeyboardType.Text, error = fieldErrors["issued_on"])
         Field("Expires on", expires, { expires = it }, hint = "year-month-day; empty if it does not expire", error = fieldErrors["expires_on"])
+        Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false, error = fieldErrors["notes"])
         ErrorText(error)
         if (existing) SecondaryButton("Remove this credential") { removing = true }
     }

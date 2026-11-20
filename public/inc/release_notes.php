@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.36.0' => [
+        'Your day in the phone apps, as on the website: Today, My tasks and Your week on the dashboard, the website\'s banners for agreements, training and credentials, task search and filters, editing, deleting and completing several tasks at once, alerts that open what they are about (with Undo), message previews and unread counts, and the full Compliance list.',
+        'Safety and your account in the apps: see the phones signed in to your account and sign one out or report it lost and wiped, report a privacy incident, set your mobile number and how alerts reach you, remove a passkey, set My availability, and see your calendar and meeting connections. Signing in shows the Microsoft option and a link to reset your password.',
+        'On the website, administrators are now told when a client signs in person, as they already were for signing from an emailed link, and the Schedule has a Check in button.',
+    ],
     '4.35.0' => [
         'Field casework in both phone apps: book a group session and record its attendance (one note per client who attended), choose the goal worked on and the service delivered when completing a session, offer times on a client request, and use Move, Cancel the series and Cancel the whole group as visible buttons.',
         'Clients in the apps: list filters (status, caseload, type, agency, school, office) that follow your choice on the website, preferred language, vision and the On Hold return date on the client form, more of the record shown, and the after-closure work: email the survey again, enter survey answers taken by phone, and record the follow-up checks.',

@@ -82,9 +82,9 @@ function task_return_to_list(string $returnUrl, string $message): never {
 /* ---- Complete / reopen / delete ---- */
 /* Several tasks completed at once (4.0.0). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_done'])) {
-    $n = 0;
-    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $tid) if (set_task_done($tid, $user, true)) $n++;
-    flash($n ? $n . ' task' . ($n === 1 ? '' : 's') . ' completed.' : 'Nothing was completed: choose at least one open task.', $n ? 'success' : 'error');
+    // Shared with the apps (inc/tasks.php, 4.36.0).
+    $n = tasks_bulk_done((array)($_POST['bulk_ids'] ?? []), $user);
+    flash(tasks_done_message($n), $n ? 'success' : 'error');
     redirect('tasks.php');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_done'])) {
@@ -97,14 +97,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_done'])) {
     redirect($returnUrl);
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_task']) && $isAdmin) {
-    $tid = (int)($_POST['task_id'] ?? 0);
-    $tq = db()->prepare('SELECT title FROM tasks WHERE id = ?');
-    $tq->execute([$tid]);
-    $title = $tq->fetchColumn();
-    $del = db()->prepare('DELETE FROM tasks WHERE id = ?');
-    $del->execute([$tid]);
-    if ($title !== false && $del->rowCount() === 1) {
-        audit($user['id'], 'task.delete', 'task', $tid, (string)$title);
+    // Shared with the apps (inc/tasks.php, 4.36.0).
+    if (task_delete((int)($_POST['task_id'] ?? 0), (int)$user['id'])) {
         task_return_to_list($returnUrl, 'Task deleted.');
     } else {
         flash('That task no longer exists. It may already have been deleted.', 'error');

@@ -118,7 +118,7 @@ object ScreenFocus {
 val LocalSavePresses = androidx.compose.runtime.compositionLocalOf<Any?> { null }
 
 /** What the phone's autofill service may put in a field. */
-enum class Fill { Email, Password, NewPassword, Code }
+enum class Fill { Email, Password, NewPassword, Code, Phone }
 
 /**
  * Lets the phone's autofill service (a password manager, the keyboard's suggestions) fill this
@@ -131,6 +131,7 @@ fun Modifier.autofillAs(fill: Fill, onFill: (String) -> Unit): Modifier = compos
         Fill.Password -> AutofillType.Password
         Fill.NewPassword -> AutofillType.NewPassword
         Fill.Code -> AutofillType.SmsOtpCode
+        Fill.Phone -> AutofillType.PhoneNumber
     }
     val autofill = LocalAutofill.current
     val fill = androidx.compose.runtime.rememberUpdatedState(onFill)

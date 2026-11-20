@@ -7,13 +7,24 @@ struct MessageThreadSummary: Decodable, Identifiable {
     let thread: MessageThread
     let unreadClient: Int?
     let unreadCounselor: Int?
+    /// The last message, cut to 60 characters, and who wrote it ("You: ", "<colleague>: " or ""
+    /// for the client's or counselor's words), as the website's list (4.36.0); nil from an older server.
+    let lastBody: String?
+    let lastSenderLabel: String?
     var id: Int { thread.id }
-    private enum CodingKeys: String, CodingKey { case unreadClient, unreadCounselor }
+    private enum CodingKeys: String, CodingKey { case unreadClient, unreadCounselor, lastBody, lastSenderLabel }
     init(from d: Decoder) throws {
         thread = try MessageThread(from: d)
         let c = try d.container(keyedBy: CodingKeys.self)
         unreadClient = try? c.decodeIfPresent(Int.self, forKey: .unreadClient)
         unreadCounselor = try? c.decodeIfPresent(Int.self, forKey: .unreadCounselor)
+        lastBody = (try? c.decodeIfPresent(String.self, forKey: .lastBody)) ?? nil
+        lastSenderLabel = (try? c.decodeIfPresent(String.self, forKey: .lastSenderLabel)) ?? nil
+    }
+    /// "You: See you Tuesday" (4.36.0), or nil when the server sends no preview.
+    var preview: String? {
+        guard let lastBody, !lastBody.isEmpty else { return nil }
+        return (lastSenderLabel ?? "") + lastBody
     }
     /// Opening a thread marks only the channel it shows as read: start on the counselor's
     /// when every unread message is there.
@@ -26,13 +37,27 @@ struct MessageThreadSummary: Decodable, Identifiable {
         return parts.joined(separator: ", ")
     }
 }
-struct MessageThreadSummaries: Decodable { let threads: [MessageThreadSummary] }
+struct MessageThreadSummaries: Decodable {
+    let threads: [MessageThreadSummary]
+    /// All conversations and all unread messages (4.36.0); nil from an older server.
+    let total: Int?
+    let unreadTotal: Int?
+    private enum CodingKeys: String, CodingKey { case threads, total, unreadTotal }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        threads = try c.decode([MessageThreadSummary].self, forKey: .threads)
+        total = (try? c.decodeIfPresent(Int.self, forKey: .total)) ?? nil
+        unreadTotal = (try? c.decodeIfPresent(Int.self, forKey: .unreadTotal)) ?? nil
+    }
+}
 
 /// Secure message center (web v2.53 parity): staff ↔ client and staff ↔ counselor
 /// threads, one per client per channel.
 struct MessagesView: View {
     @EnvironmentObject var api: API
     @State private var threads: [MessageThreadSummary] = []
+    @State private var total: Int?
+    @State private var unreadTotal: Int?
     @State private var loaded = false
     @State private var error: String?
     @State private var picking = false
@@ -52,12 +77,23 @@ struct MessagesView: View {
             } else if !loaded && error == nil {
                 ProgressView("Loading conversations…")
             }
+            // 4.36.0: the website's totals above the list (unread first, then the most recent).
+            if loaded, let unreadTotal {
+                Text("\(unreadTotal) unread.").font(.callout.weight(.medium))
+            }
+            if loaded, let total, total > threads.count {
+                Text("Showing \(threads.count) of \(total) conversations (unread first, then the most recent). Choose a client above to open any other conversation.")
+                    .font(.callout)
+            }
             ForEach(threads) { summary in
                 let t = summary.thread
                 NavigationLink { MessageThreadView(clientId: t.clientId, clientName: t.clientName, startChannel: summary.startChannel, drafts: $drafts) } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.clientName).font(.body.weight(.semibold))
+                            if let preview = summary.preview {
+                                Text(preview).font(.callout).lineLimit(2)
+                            }
                             Text("\(t.total) message\(t.total == 1 ? "" : "s")\(t.lastAt != nil ? " · \(formatDateTime(t.lastAt!))" : "")")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
                         }
@@ -74,6 +110,7 @@ struct MessagesView: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel([t.clientName,
                                          t.unread > 0 ? summary.unreadLabel : nil,
+                                         summary.preview,
                                          "\(t.total) message\(t.total == 1 ? "" : "s")",
                                          t.lastAt.map { "last \(formatDateTime($0))" }]
                         .compactMap { $0 }.joined(separator: ", "))
@@ -98,6 +135,8 @@ struct MessagesView: View {
             error = nil
             let r: MessageThreadSummaries = try await api.call("message_threads")
             threads = r.threads
+            total = r.total
+            unreadTotal = r.unreadTotal
             loaded = true
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
@@ -166,8 +205,14 @@ struct MessageClientPicker: View {
 struct MessageThreadView: View {
     @EnvironmentObject var api: API
     let clientId: Int
-    let clientName: String
+    /// The name it was opened with; "" from an alert's link, filled from the thread's reply.
+    private let openedName: String
+    @State private var loadedName: String?
+    private var clientName: String { openedName.isEmpty ? (loadedName ?? "Messages") : openedName }
     @State private var channel: String
+    /// On the counselor channel (4.36.0): the counselor email is not confirmed yet, so the
+    /// counselor portal does not show this client; said above the reply box before typing.
+    @State private var counselorUnconfirmedText: String?
     @State private var messages: [ThreadMessage] = []
     @State private var counselorName: String?
     /// One draft per client and channel, so text written to the client never moves to the
@@ -203,7 +248,7 @@ struct MessageThreadView: View {
     /// `startChannel` is the conversation shown first ("client" or "counselor").
     init(clientId: Int, clientName: String, startChannel: String = "client", drafts: Binding<[String: String]>? = nil) {
         self.clientId = clientId
-        self.clientName = clientName
+        self.openedName = clientName
         self.sharedDrafts = drafts
         _channel = State(initialValue: startChannel == "counselor" ? "counselor" : "client")
     }
@@ -315,6 +360,13 @@ struct MessageThreadView: View {
                     .accessibilityInputLabels(["Remove attachment", "Remove"])
                 }
                 .padding(.horizontal)
+            }
+            if channel == "counselor", let counselorUnconfirmedText {
+                Text(counselorUnconfirmedText)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal)
             }
             HStack(spacing: 8) {
                 if canAttach { attachMenu }
@@ -508,6 +560,9 @@ struct MessageThreadView: View {
             guard requested == channel else { return }   // the channel changed while this was loading
             messages = r.messages
             counselorName = r.counselorName
+            if !r.clientName.isEmpty { loadedName = r.clientName }
+            let warning = r.counselorUnconfirmedText ?? ""
+            counselorUnconfirmedText = requested == "counselor" && r.counselorUnconfirmed == true && !warning.isEmpty ? warning : nil
             textEnabled = r.textEnabled ?? false
             textBlocked = r.textBlocked
             loaded = true
@@ -560,9 +615,9 @@ struct MessageThreadView: View {
             } else if let warning = r.warning {
                 // Sent, with something to know (a text held until 8 a.m., or one that could not go).
                 if target == channel { notice = warning }
-                announce("Message sent. " + warning)
+                announce(sentMessageText(noticed: r.noticed == true) + " " + warning)
             } else {
-                announce("Message sent")
+                announce(sentMessageText(noticed: r.noticed == true))
             }
         } catch APIError.network {
             // A lost reply can come after the server has saved the message, so "could not reach
@@ -581,14 +636,22 @@ struct MessageThreadView: View {
 struct PostMessageResponse: Decodable {
     let delivered: Bool?
     let warning: String?
-    private enum CodingKeys: String, CodingKey { case delivered, warning }
+    /// The recipient was emailed that a message is waiting (4.36.0); nil from an older server.
+    let noticed: Bool?
+    private enum CodingKeys: String, CodingKey { case delivered, warning, noticed }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
+        noticed = (try? c.decodeIfPresent(Bool.self, forKey: .noticed)) ?? nil
         delivered = (try? c.decodeIfPresent(Bool.self, forKey: .delivered))
             ?? (try? c.decodeIfPresent(Int.self, forKey: .delivered)).map { $0 != 0 }
         let text = try? c.decodeIfPresent(String.self, forKey: .warning)
         warning = (text ?? "").isEmpty ? nil : text
     }
+}
+
+/// "Message sent." and, when the server emailed the recipient, the website's sentence about it.
+func sentMessageText(noticed: Bool) -> String {
+    "Message sent." + (noticed ? " They were emailed that a message is waiting." : "")
 }
 
 /// A file sent with a message: one already on the client's record, or a new one.

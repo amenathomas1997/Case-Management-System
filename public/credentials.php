@@ -33,23 +33,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['save_credential']) |
         flash('Removed ' . $existing['name'] . '.');
         redirect($back);
     }
-    $str = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
-    $type = $str('type');
-    $name = $type === 'Other' || $type === '' ? $str('other_name') : $type;
+    // Checked by the helper the apps' save_credential uses too (inc/staff_credentials.php, 4.36.0).
     $sfx = $cid > 0 ? '_' . $cid : '';
-    $errs = [];
-    // 4.30.0: a missing or too long name under Other is on the name field, not on the Credential list.
-    if ($type === 'Other' && $name === '') $errs['other_name' . $sfx] = 'Name the credential, since Other is chosen.';
-    elseif ($name === '') $errs['type' . $sfx] = 'Choose the credential, or choose Other and name it.';
-    elseif (mb_strlen($name) > 120) $errs['other_name' . $sfx] = 'Keep the name to 120 characters or fewer.';
-    $issued = $str('issued_on') === '' ? null : valid_date($str('issued_on'), 1950, (int)date('Y'));
-    if ($str('issued_on') !== '' && $issued === null) $errs['issued_on' . $sfx] = 'Enter the date issued as a real date, not in the future.';
-    $expires = $str('expires_on') === '' ? null : valid_date($str('expires_on'), 1950, (int)date('Y') + 20);
-    if ($str('expires_on') !== '' && $expires === null) $errs['expires_on' . $sfx] = 'Enter the expiry date as a real date, or leave it empty if it does not expire.';
-    if ($issued && $expires && $expires < $issued) $errs['expires_on' . $sfx] = 'The expiry date is before the date issued.';
-    foreach (['number' => 80, 'issuer' => 120, 'notes' => 255] as $k => $max) if (mb_strlen($str($k)) > $max) $errs[$k . $sfx] = 'Keep this to ' . $max . ' characters or fewer.';
+    $checked = staff_credential_input($_POST, $sfx);
+    $errs = $checked['errors'];
+    $name = $checked['name'];
+    $expires = $checked['vals'][4];
     if ($errs) { keep_input(); keep_field_errors($errs); redirect($back . ($cid > 0 ? '#cred-' . $cid : '#add-h')); }
-    $vals = [$name, $str('number') ?: null, $str('issuer') ?: null, $issued, $expires, $str('notes') ?: null];
+    $vals = $checked['vals'];
     if ($cid > 0) { db()->prepare('UPDATE staff_credentials SET name = ?, number = ?, issuer = ?, issued_on = ?, expires_on = ?, notes = ?, updated_at = NOW() WHERE id = ?')->execute(array_merge($vals, [$cid])); credential_close_tasks($cid); }
     else db()->prepare('INSERT INTO staff_credentials (name, number, issuer, issued_on, expires_on, notes, user_id, added_by) VALUES (?,?,?,?,?,?,?,?)')->execute(array_merge($vals, [$who, $uid]));
     audit($uid, 'credential.save', 'user', $who, $name . ($expires ? ', expires ' . $expires : ''));

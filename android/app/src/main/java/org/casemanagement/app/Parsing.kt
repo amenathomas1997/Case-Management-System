@@ -234,13 +234,19 @@ fun parseTrackNotes(r: JSONObject): TrackNotes {
 
 /* ---------- messages, documents, homework ---------- */
 
-data class ThreadSummary(val clientId: Int, val clientName: String, val unread: Int, val lastAt: String?, val unreadClient: Int = 0, val unreadCounselor: Int = 0)
+data class ThreadSummary(val clientId: Int, val clientName: String, val unread: Int, val lastAt: String?, val unreadClient: Int = 0, val unreadCounselor: Int = 0,
+    /** 4.36.0: the last message (cut at 60 characters) and who wrote it ("You: ", "<name>: " or ""). */
+    val lastBody: String? = null, val lastSenderLabel: String? = null)
 
 fun parseMessageThreads(r: JSONObject): List<ThreadSummary> = r.optJSONArray("threads").objects().map { t ->
     ThreadSummary(t.optInt("client_id"), t.text("client_name"), t.optInt("unread"), t.str("last_at"),
         // 4.34.0: by channel; an older server's single count is the client's.
-        if (t.has("unread_client")) t.optInt("unread_client") else t.optInt("unread"), t.optInt("unread_counselor"))
+        if (t.has("unread_client")) t.optInt("unread_client") else t.optInt("unread"), t.optInt("unread_counselor"),
+        t.str("last_body"), if (t.isNull("last_sender_label")) null else t.optString("last_sender_label"))
 }
+
+/** 4.36.0: how many conversations there are in all, and how many unread messages; null from an older server. */
+fun parseThreadTotals(r: JSONObject): Pair<Int, Int>? = if (r.has("total")) r.optInt("total") to r.optInt("unread_total") else null
 
 /** 4.34.0: a conversation opens on the channel with the unread messages, as on the iPhone. */
 fun startChannel(unreadClient: Int, unreadCounselor: Int): String = if (unreadClient == 0 && unreadCounselor > 0) "counselor" else "client"
@@ -256,7 +262,9 @@ fun threadChannelOptions(counselorName: String?): List<Pair<String, String>> =
     listOf("client" to "The client", "counselor" to (counselorName?.takeIf { it.isNotBlank() }?.let { "The counselor, $it" } ?: "The counselor"))
 
 data class Message(val id: Int, val who: String, val body: String, val createdAt: String?, val byText: Boolean, val documentId: Int?, val fileLabel: String?)
-data class MessageThread(val clientName: String, val counselorName: String?, val textEnabled: Boolean, val textBlocked: String?, val messages: List<Message>)
+data class MessageThread(val clientName: String, val counselorName: String?, val textEnabled: Boolean, val textBlocked: String?, val messages: List<Message>,
+    /** 4.36.0: the counselor's email is not confirmed yet, said before typing on the counselor channel. */
+    val counselorUnconfirmed: Boolean = false, val counselorUnconfirmedText: String? = null)
 
 fun parseMessageThread(r: JSONObject): MessageThread {
     val client = r.text("client_name")
@@ -265,7 +273,8 @@ fun parseMessageThread(r: JSONObject): MessageThread {
         val who = m.str("staff_name") ?: when (m.optString("sender")) { "client" -> client; "counselor" -> counselor ?: "The counselor"; else -> "Staff" }
         Message(m.optInt("id"), who, m.text("body"), m.str("created_at"), m.str("via") == "text", m.intOrNull("document_id")?.takeIf { it > 0 }, messageFileLabel(m))
     }
-    return MessageThread(client, counselor, r.optBoolean("text_enabled"), r.str("text_blocked"), messages)
+    return MessageThread(client, counselor, r.optBoolean("text_enabled"), r.str("text_blocked"), messages,
+        r.optBoolean("counselor_unconfirmed"), r.str("counselor_unconfirmed_text"))
 }
 
 data class DocumentItem(
@@ -370,13 +379,17 @@ fun parseReferrals(r: JSONObject): List<ReferralItem> = r.optJSONArray("referral
 data class TaskItem(
     val id: Int, val title: String, val details: String?, val clientId: Int?, val clientName: String?, val assignedName: String?,
     val status: String, val daysLeft: Int?, val canOpenClient: Boolean, val dueDate: String? = null,
+    // 4.36.0: the referral it is about, whether the system made it, and who it is for.
+    val canOpenReferral: Boolean = false, val referralId: Int? = null, val referralName: String? = null,
+    val automatic: Boolean = false, val assignedTo: Int? = null,
 ) {
     val open: Boolean get() = status == "Open"
 }
 
 fun parseTasks(r: JSONObject): List<TaskItem> = r.optJSONArray("tasks").objects().map { t ->
     TaskItem(t.optInt("id"), t.text("title"), t.str("details"), t.intOrNull("client_id"), t.str("client_name"), t.str("assigned_name"),
-        t.text("status"), t.intOrNull("days_left"), t.optBoolean("can_open_client"), t.str("due_date"))
+        t.text("status"), t.intOrNull("days_left"), t.optBoolean("can_open_client"), t.str("due_date"),
+        t.optBoolean("can_open_referral"), t.intOrNull("referral_id"), t.str("referral_name"), t.optBoolean("automatic"), t.intOrNull("assigned_to"))
 }
 
 /** 4.34.0: a task that is done is never "overdue": its due date is said plainly. [dayWords] formats the date. */
@@ -398,29 +411,49 @@ fun dueWords(daysLeft: Int?): String = when {
     else -> "due in $daysLeft days"
 }
 
-data class AlertItem(val id: Int, val message: String, val createdAt: String?, val unread: Boolean)
+data class AlertItem(val id: Int, val message: String, val createdAt: String?, val unread: Boolean, val link: String? = null)
 data class Alerts(val items: List<AlertItem>, val unread: Int)
 
 fun parseNotifications(r: JSONObject) = Alerts(
-    r.optJSONArray("notifications").objects().map { AlertItem(it.optInt("id"), it.text("message"), it.str("created_at"), it.optBoolean("unread")) },
+    r.optJSONArray("notifications").objects().map { AlertItem(it.optInt("id"), it.text("message"), it.str("created_at"), it.optBoolean("unread"), it.str("link")) },
     r.optInt("unread"),
 )
 
-data class ExpiringTrack(val id: Int, val client: String, val title: String, val expirationDate: String?, val expired: Boolean)
+data class ExpiringTrack(val id: Int, val client: String, val title: String, val expirationDate: String?, val expired: Boolean, val clientId: Int = 0)
 data class RecentReferral(val id: Int, val clientName: String, val reason: String, val status: String, val createdAt: String?)
 data class RecentNote(val id: Int, val subject: String, val noteType: String, val clientId: Int, val clientName: String, val createdAt: String?)
 data class Dashboard(
     val activeClients: Int, val pendingClients: Int, val newReferrals: Int, val unbilledHours: Double, val unbilledAmount: Double,
     val expiring: List<ExpiringTrack>, val expiringTotal: Int, val recentReferrals: List<RecentReferral>, val recentNotes: List<RecentNote>,
+    // 4.36.0 (null or empty from an older server): Today, My tasks, Your week and the banners' counts.
+    val today: List<TodayItem>? = null, val todayHeading: String? = null, val tasks: DashTasks? = null, val weekText: String? = null,
+    val agreementsNeeded: Int? = null, val trainingNeeded: Int? = null, val credentialsDue: List<Pair<String, String>>? = null,
 )
 
+data class TodaySession(val id: Int, val text: String)
+data class TodayItem(val kind: String, val count: Int, val text: String, val sessions: List<TodaySession>)
+data class DashTask(val id: Int, val title: String, val line: String)
+data class DashTasks(val items: List<DashTask>, val total: Int, val overdue: Int, val team: Boolean, val heading: String)
+
 fun parseDashboard(r: JSONObject): Dashboard {
-    val expiring = r.optJSONArray("expiring").objects().map { ExpiringTrack(it.optInt("id"), it.text("client"), it.text("title"), it.str("expiration_date"), it.optBoolean("is_expired")) }
+    val expiring = r.optJSONArray("expiring").objects().map { ExpiringTrack(it.optInt("id"), it.text("client"), it.text("title"), it.str("expiration_date"), it.optBoolean("is_expired"), it.optInt("client_id")) }
+    val today = r.optJSONArray("today")?.objects()?.map { i ->
+        // The contract's "sessions"; "sub" as the plan's helper names it.
+        val subs = (i.optJSONArray("sessions") ?: i.optJSONArray("sub")).objects().map { s -> TodaySession(s.optInt("id", s.optInt("session_id")), s.text("text")) }
+        TodayItem(i.text("kind"), i.optInt("count"), i.text("text"), subs)
+    }
+    val tasks = r.optJSONObject("tasks")?.let { t ->
+        DashTasks((t.optJSONArray("items") ?: t.optJSONArray("rows")).objects().map { x -> DashTask(x.optInt("id"), x.text("title"), x.str("line") ?: x.text("title")) },
+            t.optInt("total"), t.optInt("overdue"), t.optBoolean("team"), t.text("heading"))
+    }
     return Dashboard(
         r.optInt("active_clients"), r.optInt("pending_clients"), r.optInt("new_referrals"), r.num("unbilled_hours"), r.num("unbilled_amount"),
         expiring, r.optInt("expiring_total", expiring.size),
         r.optJSONArray("recent_referrals").objects().map { RecentReferral(it.optInt("id"), it.text("client_name"), it.text("reason"), it.text("status"), it.str("created_at")) },
         r.optJSONArray("recent_notes").objects().map { RecentNote(it.optInt("id"), it.text("subject"), it.text("note_type"), it.optInt("client_id"), it.text("client_name"), it.str("created_at")) },
+        today, r.str("today_heading"), tasks, r.str("week_text"),
+        r.intOrNull("agreements_needed"), r.intOrNull("training_needed"),
+        r.optJSONArray("credentials_due")?.objects()?.map { it.text("name") to it.text("words") },
     )
 }
 

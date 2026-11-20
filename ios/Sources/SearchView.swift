@@ -54,12 +54,12 @@ struct SearchView: View {
                                 hitRow(hit)
                             }
                         } else if hit.kind == "track", let clientId = hit.clientId {
-                            NavigationLink { SearchTrackView(trackId: hit.id, clientId: clientId) } label: {
+                            NavigationLink { TrackByIdView(trackId: hit.id, clientId: clientId) } label: {
                                 hitRow(hit)
                             }
                         } else if hit.kind == "goal", let trackId = hit.trackId, trackId > 0, let clientId = hit.clientId {
                             // A goal opens the track it belongs to.
-                            NavigationLink { SearchTrackView(trackId: trackId, clientId: clientId) } label: {
+                            NavigationLink { TrackByIdView(trackId: trackId, clientId: clientId) } label: {
                                 hitRow(hit)
                             }
                         } else if hit.kind == "invoice" {
@@ -139,9 +139,9 @@ struct SearchView: View {
     }
 }
 
-/// Opens a track found by search. A track comes with its client's record, so that record is
+/// Opens a track by its id (search results, and 4.36.0 compliance rows). A track comes with its client's record, so that record is
 /// loaded and the track picked out of it.
-private struct SearchTrackView: View {
+struct TrackByIdView: View {
     @EnvironmentObject var api: API
     let trackId: Int
     let clientId: Int
